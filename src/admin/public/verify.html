@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FATRACING Admin - Verify</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .verify-container {
+            background: white;
+            border-radius: 8px;
+            padding: 2rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 400px;
+        }
+        .verify-header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .verify-header h1 {
+            color: #2c3e50;
+            margin-bottom: 0.5rem;
+        }
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 1rem;
+            text-align: center;
+            letter-spacing: 5px;
+            font-size: 1.5rem;
+        }
+        .btn {
+            width: 100%;
+            padding: 0.75rem;
+            background-color: #3498db;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            border: none;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 600;
+        }
+        .btn:hover {
+            background-color: #2980b9;
+        }
+        .btn-secondary {
+            background-color: #95a5a6;
+        }
+        .btn-secondary:hover {
+            background-color: #7f8c8d;
+        }
+        .error {
+            color: #e74c3c;
+            text-align: center;
+            margin-top: 1rem;
+        }
+        .info {
+            text-align: center;
+            margin-bottom: 1rem;
+            color: #7f8c8d;
+        }
+        .resend-link {
+            text-align: center;
+            margin-top: 1rem;
+        }
+        .resend-link a {
+            color: #3498db;
+            text-decoration: none;
+        }
+        .resend-link a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="verify-container">
+        <div class="verify-header">
+            <h1>🚴 FATRACING Admin</h1>
+            <p>Подтверждение входа</p>
+        </div>
+        
+        <div class="info">
+            Мы отправили код подтверждения в Telegram
+        </div>
+        
+        <form id="verify-form">
+            <div class="form-group">
+                <label for="verification-code">Код подтверждения</label>
+                <input type="text" id="verification-code" name="code" maxlength="6" required>
+            </div>
+            
+            <button type="submit" class="btn">Подтвердить</button>
+        </form>
+        
+        <div class="resend-link">
+            <a href="#" id="resend-code">Отправить код повторно</a>
+        </div>
+        
+        <div id="error-message" class="error" style="display: none;"></div>
+    </div>
+
+    <script>
+        // Get telegram_id from URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const telegramId = urlParams.get('telegram_id');
+        
+        if (!telegramId) {
+            window.location.href = '/login.html';
+        }
+        
+        document.getElementById('verify-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const code = document.getElementById('verification-code').value;
+            const errorMessage = document.getElementById('error-message');
+            errorMessage.style.display = 'none';
+            
+            try {
+                const response = await fetch('/api/auth/verify', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ 
+                        telegram_id: telegramId,
+                        code: code
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    // Verification successful, redirect to admin panel
+                    window.location.href = '/';
+                } else {
+                    errorMessage.textContent = data.error || 'Неверный код подтверждения';
+                    errorMessage.style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Verification error:', error);
+                errorMessage.textContent = 'Ошибка подключения к серверу';
+                errorMessage.style.display = 'block';
+            }
+        });
+        
+        document.getElementById('resend-code').addEventListener('click', async function(e) {
+            e.preventDefault();
+            
+            try {
+                const response = await fetch('/api/auth/resend', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ telegram_id: telegramId })
+                });
+                
+                if (response.ok) {
+                    alert('Код отправлен повторно');
+                } else {
+                    const data = await response.json();
+                    alert(data.error || 'Ошибка при отправке кода');
+                }
+            } catch (error) {
+                console.error('Resend error:', error);
+                alert('Ошибка подключения к серверу');
+            }
+        });
+    </script>
+</body>
+</html>

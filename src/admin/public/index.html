@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FATRACING Admin Panel</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+        }
+        .header {
+            background-color: #2c3e50;
+            color: white;
+            padding: 1rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .user-info {
+            font-size: 0.9rem;
+        }
+        .logout-btn {
+            background: none;
+            border: 1px solid white;
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+        .logout-btn:hover {
+            background-color: rgba(255,255,255,0.1);
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 1.5rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .card h3 {
+            margin-top: 0;
+            color: #2c3e50;
+        }
+        .stats-number {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #3498db;
+        }
+        .nav {
+            background-color: #34495e;
+            padding: 0;
+        }
+        .nav ul {
+            list-style: none;
+            display: flex;
+            margin: 0;
+            padding: 0;
+        }
+        .nav li {
+            margin: 0;
+        }
+        .nav a {
+            display: block;
+            padding: 1rem 1.5rem;
+            color: white;
+            text-decoration: none;
+            transition: background-color 0.3s;
+        }
+        .nav a:hover {
+            background-color: #2c3e50;
+        }
+        .nav a.active {
+            background-color: #3498db;
+        }
+        .content {
+            background: white;
+            border-radius: 8px;
+            padding: 1.5rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-top: 1rem;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+        th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+        }
+        .btn {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            background-color: #3498db;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            border: none;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+        .btn:hover {
+            background-color: #2980b9;
+        }
+        .btn-danger {
+            background-color: #e74c3c;
+        }
+        .btn-danger:hover {
+            background-color: #c0392b;
+        }
+        .btn-success {
+            background-color: #27ae60;
+        }
+        .btn-success:hover {
+            background-color: #229954;
+        }
+        .btn-secondary {
+            background-color: #7f8c8d;
+        }
+        .btn-secondary:hover {
+            background-color: #707b7c;
+        }
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }
+        .form-group input, .form-group textarea, .form-group select {
+            width: 100%;
+            padding: 0.5rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 1rem;
+        }
+        .loading {
+            text-align: center;
+            padding: 2rem;
+        }
+        .error {
+            color: #e74c3c;
+            text-align: center;
+            padding: 1rem;
+        }
+        .broadcast-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .broadcast-actions .draft-btn {
+            margin: 0;
+        }
+        .checkbox-group label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 0;
+            font-weight: 500;
+        }
+        .checkbox-group input {
+            width: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🚴 FATRACING Admin Panel</h1>
+        <div class="user-info">
+            <span id="user-name">Загрузка...</span>
+            <button class="logout-btn" onclick="logout()">Выйти</button>
+        </div>
+    </div>
+    
+    <div class="nav">
+        <ul>
+            <li><a href="#" class="active" onclick="loadDashboard()">Dashboard</a></li>
+            <li><a href="#" onclick="loadProducts()">Магазин</a></li>
+            <li><a href="#" onclick="loadOrders()">Заказы</a></li>
+            <li><a href="#" onclick="loadPromos()">Промокоды</a></li>
+            <li><a href="#" onclick="loadBroadcasts()">Рассылки</a></li>
+            <li><a href="#" onclick="loadUsers()">Пользователи</a></li>
+        </ul>
+    </div>
+    
+    <div class="container">
+        <div id="content">
+            <!-- Content will be loaded here -->
+        </div>
+    </div>
+
+    <script>
+        // Check authentication on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            checkAuth();
+        });
+
+        // Authentication functions
+        function checkAuth() {
+            fetch('/api/auth/check', { credentials: 'include' })
+                .then(response => {
+                    if (response.ok) {
+                        return response.json();
+                    } else {
+                        throw new Error('Not authenticated');
+                    }
+                })
+                .then(data => {
+                    // User is authenticated, load dashboard
+                    document.getElementById('user-name').textContent = data.user.first_name + ' ' + (data.user.last_name || '');
+                    loadDashboard();
+                })
+                .catch(error => {
+                    // User is not authenticated, redirect to login
+                    window.location.href = '/login.html';
+                });
+        }
+
+        function logout() {
+            fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
+                .then(() => {
+                    window.location.href = '/login.html';
+                })
+                .catch(error => {
+                    console.error('Logout error:', error);
+                    window.location.href = '/login.html';
+                });
+        }
+
+        // Utility functions
+        function showLoading() {
+            document.getElementById('content').innerHTML = '<div class="loading">Загрузка...</div>';
+        }
+
+        function showError(message) {
+            document.getElementById('content').innerHTML = `<div class="error">Ошибка: ${message}</div>`;
+        }
+
+        function formatDate(dateString) {
+            if (!dateString) return '-';
+            const date = new Date(dateString);
+            return date.toLocaleDateString('ru-RU');
+        }
+
+        // Dashboard
+        function loadDashboard() {
+            showLoading();
+            
+            // Fetch dashboard stats
+            fetch('/api/dashboard/stats', { credentials: 'include' })
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('content').innerHTML = `
+                        <h2>Dashboard</h2>
+                        <div class="dashboard">
+                            <div class="card">
+                                <h3>Пользователи</h3>
+                                <div class="stats-number">${data.totalUsers}</div>
+                                <p>Всего в боте</p>
+                            </div>
+                            <div class="card">
+                                <h3>Подписчики</h3>
+                                <div class="stats-number">${data.consentUsers}</div>
+                                <p>Активные</p>
+                            </div>
+                            <div class="card">
+                                <h3>Заказы</h3>
+                                <div class="stats-number">${data.newOrders}</div>
+                                <p>Новые</p>
+                            </div>
+                            <div class="card">
+                                <h3>Выручка</h3>
+                                <div class="stats-number">${data.totalRevenue.toFixed(2)} ₽</div>
+                                <p>За месяц</p>
+                            </div>
+                        </div>
+                        <div class="content">
+                            <h3>Последние заказы</h3>
+                            <div id="orders-table">Загрузка...</div>
+                        </div>
+                    `;
+                    
+                    // Load recent orders
+                    loadRecentOrders();
+                })
+                .catch(error => {
+                    console.error('Error loading dashboard:', error);
+                    showError('Не удалось загрузить данные дашборда');
+                });
+        }
+
+        function loadRecentOrders() {
+            fetch('/api/orders?limit=5', { credentials: 'include' })
+                .then(response => response.json())
+                .then(orders => {
+                    const tableHtml = orders.length > 0 ? `
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Пользователь</th>
+                                    <th>Сумма</th>
+                                    <th>Статус</th>
+                                    <th>Дата</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${orders.map(order => `
+                                    <tr>
+                                        <td>${order.id}</td>
+                                        <td>${order.first_name} ${order.last_name}</td>
+                                        <td>${order.total_amount ? order.total_amount.toFixed(2) : 0} ₽</td>
+                                        <td>${order.status}</td>
+                                        <td>${formatDate(order.created_at)}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    ` : '<p style="text-align: center;">Нет заказов</p>';
+                    
+                    document.getElementById('orders-table').innerHTML = tableHtml;
+                })
+                .catch(error => {
+                    console.error('Error loading orders:', error);
+                    document.getElementById('orders-table').innerHTML = '<p style="text-align: center; color: #e74c3c;">Ошибка загрузки заказов</p>';
+                });
+        }
+
+        // Products
+        function loadProducts() {
+            showLoading();
+            
+            fetch('/api/products', { credentials: 'include' })
+                .then(response => response.json())
+                .then(products => {
+                    document.getElementById('content').innerHTML = `
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <h2>Магазин мерча</h2>
+                            <button class="btn" onclick="showAddProductForm()">Добавить товар</button>
+                        </div>
+                        <div class="content">
+                            ${products.length > 0 ? `
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>ID</th>
+                                            <th>Название</th>
+                                            <th>Цена</th>
+                                            <th>В наличии</th>
+                                            <th>Статус</th>
+                                            <th>Действия</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${products.map(product => `
+                                            <tr>
+                                                <td>${product.id}</td>
+                                                <td>${product.name}</td>
+                                                <td>${product.price} ${product.currency}</td>
+                                                <td>${product.stock}</td>
+                                                <td>${product.status}</td>
+                                                <td>
+                                                    <button class="btn" onclick="editProduct(${product.id})">Редактировать</button>
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            ` : '<p style="text-align: center;">Нет товаров</p>'}
+                        </div>
+                    `;
+                })
+                .catch(error => {
+                    console.error('Error loading products:', error);
+                    showError('Не удалось загрузить товары');
+                });
+        }
+
+        // Orders
+        function loadOrders() {
+            showLoading();
+            
+            fetch('/api/orders', { credentials: 'include' })
+                .then(response => response.json())
+                .then(orders => {
+                    document.getElementById('content').innerHTML = `
+                        <h2>Заказы</h2>
+                        <div class="content">
+                            ${orders.length > 0 ? `
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>ID</th>
+                                            <th>Пользователь</th>
+                                            <th>Сумма</th>
+                                            <th>Статус</th>
+                                            <th>Дата</th>
+                                            <th>Действия</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${orders.map(order => `
+                                            <tr>
+                                                <td>${order.id}</td>
+                                                <td>${order.first_name} ${order.last_name}</td>
+                                                <td>${order.total_amount ? order.total_amount.toFixed(2) : 0} ₽</td>
+                                                <td>${order.status}</td>
+                                                <td>${formatDate(order.created_at)}</td>
+                                                <td>
+                                                    <button class="btn" onclick="updateOrderStatus(${order.id}, 'processing')">В обработку</button>
+                                                    <button class="btn btn-success" onclick="updateOrderStatus(${order.id}, 'completed')">Выполнен</button>
+                                                    <button class="btn btn-danger" onclick="updateOrderStatus(${order.id}, 'cancelled')">Отменен</button>
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            ` : '<p style="text-align: center;">Нет заказов</p>'}
+                        </div>
+                    `;
+                })
+                .catch(error => {
+                    console.error('Error loading orders:', error);
+                    showError('Не удалось загрузить заказы');
+                });
+        }
+
+        // Promos
+        function loadPromos() {
+            showLoading();
+            
+            fetch('/api/promos', { credentials: 'include' })
+                .then(response => response.json())
+                .then(promos => {
+                    document.getElementById('content').innerHTML = `
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <h2>Промокоды</h2>
+                            <button class="btn" onclick="showAddPromoForm()">Добавить промокод</button>
+                        </div>
+                        <div class="content">
+                            ${promos.length > 0 ? `
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>ID</th>
+                                            <th>Партнёр</th>
+                                            <th>Промокод</th>
+                                            <th>Статус</th>
+                                            <th>Действия</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${promos.map(promo => `
+                                            <tr>
+                                                <td>${promo.id}</td>
+                                                <td>${promo.partner_name}</td>
+                                                <td>${promo.code}</td>
+                                                <td>${promo.status}</td>
+                                                <td>
+                                                    <button class="btn" onclick="editPromo(${promo.id})">Редактировать</button>
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            ` : '<p style="text-align: center;">Нет промокодов</p>'}
+                        </div>
+                    `;
+                })
+                .catch(error => {
+                    console.error('Error loading promos:', error);
+                    showError('Не удалось загрузить промокоды');
+                });
+        }
+
+        // Broadcasts
+        function loadBroadcasts() {
+            showLoading();
+            
+            fetch('/api/broadcasts', { credentials: 'include' })
+                .then(response => response.json())
+                .then(broadcasts => {
+                    document.getElementById('content').innerHTML = `
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <h2>Рассылки</h2>
+                            <button class="btn" onclick="showAddBroadcastForm()">Создать рассылку</button>
+                        </div>
+                        <div class="content">
+                            ${broadcasts.length > 0 ? `
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>ID</th>
+                                            <th>Заголовок</th>
+                                            <th>Статус</th>
+                                            <th>Отправлено</th>
+                                            <th>Дата</th>
+                                            <th>Действия</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${broadcasts.map(broadcast => `
+                                            <tr>
+                                                <td>${broadcast.id}</td>
+                                                <td>${broadcast.title}</td>
+                                                <td>${broadcast.status}</td>
+                                                <td>${broadcast.sent_count || 0}</td>
+                                                <td>${formatDate(broadcast.created_at)}</td>
+                                                <td>
+                                                    <button class="btn" onclick="editBroadcast(${broadcast.id})">Редактировать</button>
+                                                    ${broadcast.status === 'draft' ? 
+                                                        `<button class="btn btn-success" onclick="sendBroadcast(${broadcast.id})">Отправить</button>` : 
+                                                        ''}
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            ` : '<p style="text-align: center;">Нет рассылок</p>'}
+                        </div>
+                    `;
+                })
+                .catch(error => {
+                    console.error('Error loading broadcasts:', error);
+                    showError('Не удалось загрузить рассылки');
+                });
+        }
+
+        // Users
+        function loadUsers() {
+            showLoading();
+            
+            fetch('/api/users', { credentials: 'include' })
+                .then(response => response.json())
+                .then(users => {
+                    document.getElementById('content').innerHTML = `
+                        <h2>Пользователи</h2>
+                        <div class="content">
+                            ${users.length > 0 ? `
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>ID</th>
+                                            <th>Telegram ID</th>
+                                            <th>Имя</th>
+                                            <th>Username</th>
+                                            <th>Подписка</th>
+                                            <th>Рассылка</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${users.map(user => `
+                                            <tr>
+                                                <td>${user.id}</td>
+                                                <td>${user.telegram_id}</td>
+                                                <td>${user.first_name} ${user.last_name || ''}</td>
+                                                <td>${user.username || '-'}</td>
+                                                <td>${formatDate(user.created_at)}</td>
+                                                <td>${user.consent_to_broadcast ? 'Да' : 'Нет'}</td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            ` : '<p style="text-align: center;">Нет пользователей</p>'}
+                        </div>
+                    `;
+                })
+                .catch(error => {
+                    console.error('Error loading users:', error);
+                    showError('Не удалось загрузить пользователей');
+                });
+        }
+
+        // Form functions (placeholders)
+        function showAddProductForm() {
+            alert('Форма добавления товара будет реализована позже');
+        }
+
+        function showAddPromoForm() {
+            alert('Форма добавления промокода будет реализована позже');
+        }
+
+        function showAddBroadcastForm() {
+            document.getElementById('content').innerHTML = `
+                <h2>Создать рассылку</h2>
+                <div class="content">
+                    <div class="form-group">
+                        <label for="broadcast-title">Заголовок</label>
+                        <input id="broadcast-title" type="text" placeholder="Например: Новая коллекция мерча" />
+                    </div>
+                    <div class="form-group">
+                        <label for="broadcast-content">Сообщение</label>
+                        <textarea id="broadcast-content" rows="5" placeholder="Текст рассылки" required></textarea>
+                    </div>
+                    <div class="form-group checkbox-group">
+                        <label for="broadcast-markdown">
+                            <input id="broadcast-markdown" type="checkbox" />
+                            Отправлять как MarkdownV2
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label for="broadcast-photo">Ссылка на фото (необязательно)</label>
+                        <input id="broadcast-photo" type="text" placeholder="https://..." />
+                    </div>
+                    <div class="form-group">
+                        <label for="broadcast-upload">Загрузить изображение</label>
+                        <input id="broadcast-upload" type="file" accept="image/*" />
+                        <button class="btn" style="margin-top:8px;" onclick="uploadBroadcastImage()">Загрузить и подставить ссылку</button>
+                        <small>Можно загрузить файл — ссылка подставится автоматически при отправке или по кнопке выше.</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="broadcast-buttons">Кнопки (JSON inline_keyboard)</label>
+                        <textarea id="broadcast-buttons" rows="3" placeholder='Например: [[{"text":"Открыть сайт","url":"https://example.com"}]]'></textarea>
+                        <small>Используйте формат Telegram inline_keyboard: массив строк, каждая строка — массив кнопок.</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="broadcast-target">Кому отправить</label>
+                        <select id="broadcast-target">
+                            <option value="consent">Только согласившиеся</option>
+                            <option value="all" selected>Все активные пользователи</option>
+                        </select>
+                    </div>
+                    <div class="broadcast-actions">
+                        <button class="btn btn-success" onclick="createBroadcastAndSend()">Создать и отправить</button>
+                        <button class="btn btn-secondary draft-btn" onclick="createBroadcast()">Создать черновик</button>
+                        <button class="btn" onclick="loadBroadcasts()">Назад к рассылкам</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function editProduct(id) {
+            alert(`Редактирование товара ID: ${id} будет реализовано позже`);
+        }
+
+        function editPromo(id) {
+            alert(`Редактирование промокода ID: ${id} будет реализовано позже`);
+        }
+
+        function editBroadcast(id) {
+            alert(`Редактирование рассылки ID: ${id} будет реализовано позже`);
+        }
+
+        function updateOrderStatus(orderId, status) {
+            if (confirm(`Изменить статус заказа на "${status}"?`)) {
+                fetch(`/api/orders/${orderId}/status`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ status }),
+                    credentials: 'include'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    alert('Статус заказа обновлен');
+                    loadOrders(); // Reload the orders list
+                })
+                .catch(error => {
+                    console.error('Error updating order status:', error);
+                    alert('Ошибка при обновлении статуса заказа');
+                });
+            }
+        }
+
+        function parseButtons(raw) {
+            const trimmed = raw ? raw.trim() : '';
+            if (!trimmed) return null;
+            try {
+                const parsed = JSON.parse(trimmed);
+                return Array.isArray(parsed) ? parsed : null;
+            } catch (error) {
+                alert('Кнопки заданы в неверном JSON формате');
+                return null;
+            }
+        }
+
+        function uploadBroadcastImage() {
+            return uploadSelectedFile(true);
+        }
+
+        function readFileAsDataURL(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = () => reject(reader.error || new Error('Ошибка чтения файла'));
+                reader.readAsDataURL(file);
+            });
+        }
+
+        async function uploadSelectedFile(autoFill) {
+            const fileInput = document.getElementById('broadcast-upload');
+            const file = fileInput?.files?.[0];
+            if (!file) return null;
+
+            if (file.size > 5 * 1024 * 1024) {
+                alert('Максимальный размер файла 5 МБ');
+                throw new Error('file-too-large');
+            }
+
+            const dataUrl = await readFileAsDataURL(file);
+
+            const response = await fetch('/api/uploads', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ name: file.name, data: dataUrl })
+            });
+            const data = await response.json();
+            if (data.error) {
+                alert(data.error);
+                throw new Error(data.error);
+            }
+            if (autoFill) {
+                document.getElementById('broadcast-photo').value = data.url;
+            }
+            return data.url;
+        }
+
+        async function buildBroadcastPayload() {
+            const title = document.getElementById('broadcast-title').value.trim();
+            const content = document.getElementById('broadcast-content').value.trim();
+            const photoField = document.getElementById('broadcast-photo').value.trim();
+            const buttonsRaw = document.getElementById('broadcast-buttons').value;
+            const target_segment = document.getElementById('broadcast-target').value;
+            const use_markdown = document.getElementById('broadcast-markdown').checked;
+
+            if (!content) {
+                alert('Введите текст рассылки');
+                throw new Error('validation');
+            }
+
+            const buttons = parseButtons(buttonsRaw);
+            if (buttonsRaw.trim() && !buttons) throw new Error('validation');
+
+            // If есть файл — загружаем и подставляем, иначе берем URL из поля
+            const uploadedUrl = await uploadSelectedFile(!photoField);
+            const photo_url = photoField || uploadedUrl || null;
+
+            return { title, content, photo_url, buttons, target_segment, use_markdown };
+        }
+
+        async function createBroadcast() {
+            try {
+                const payload = await buildBroadcastPayload();
+                const response = await fetch('/api/broadcasts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+                alert('Черновик рассылки создан');
+                loadBroadcasts();
+            } catch (error) {
+                if (error.message === 'validation') return;
+                console.error('Error creating broadcast:', error);
+                if (error.message !== 'file-too-large') {
+                    alert('Ошибка при создании рассылки');
+                }
+            }
+        }
+
+        async function createBroadcastAndSend() {
+            try {
+                const payload = await buildBroadcastPayload();
+                const createResponse = await fetch('/api/broadcasts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify(payload)
+                });
+                const data = await createResponse.json();
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+
+                const sendResponse = await fetch(`/api/broadcasts/${data.id}/status`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ status: 'sending' })
+                });
+                const result = await sendResponse.json();
+
+                if (result.error) {
+                    alert(result.error);
+                    return;
+                }
+                alert('Рассылка создана и отправлена');
+                loadBroadcasts();
+            } catch (error) {
+                if (error.message === 'validation') return;
+                console.error('Error creating and sending broadcast:', error);
+                if (error.message !== 'file-too-large') {
+                    alert('Ошибка при создании или отправке рассылки');
+                }
+            }
+        }
+
+        function sendBroadcast(broadcastId) {
+            if (confirm('Отправить рассылку?')) {
+                fetch(`/api/broadcasts/${broadcastId}/status`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ status: 'sending' }),
+                    credentials: 'include'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    alert('Рассылка отправлена');
+                    loadBroadcasts(); // Reload the broadcasts list
+                })
+                .catch(error => {
+                    console.error('Error sending broadcast:', error);
+                    alert('Ошибка при отправке рассылки');
+                });
+            }
+        }
+    </script>
+</body>
+</html>

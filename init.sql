@@ -1,0 +1,2 @@
+-- This file can be used to initialize the database with custom SQL commands
+-- The main schema is handled by the init-db script, but you can add custom initialization here if needed

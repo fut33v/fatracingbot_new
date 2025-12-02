@@ -1,0 +1,45 @@
+{
+  "name": "fatracing_bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for FATRACING cycling community",
+  "main": "src/bot/index.js",
+  "scripts": {
+    "start": "node src/bot/index.js",
+    "start:admin": "node src/admin/server.js",
+    "start-all": "node src/startAll.js",
+    "dev": "nodemon src/bot/index.js || node src/bot/index.js",
+    "dev:admin": "nodemon src/admin/server.js || node src/admin/server.js",
+    "init-db": "node src/models/initDb.js",
+    "test:db": "node src/models/testDatabase.js",
+    "seed": "node src/models/seed.js",
+    "health": "node src/healthCheck.js",
+    "check-env": "node src/checkEnv.js",
+    "setup": "node src/setup.js",
+    "docker:build": "docker-compose build",
+    "docker:up": "docker-compose up",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs",
+    "docker:dev": "docker-compose -f docker-compose.yml up",
+    "docker:prod": "docker-compose -f docker-compose.prod.yml up",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "cycling",
+    "community"
+  ],
+  "author": "FATRACING Team",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "pg": "^8.16.3",
+    "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
+}

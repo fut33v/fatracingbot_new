@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: fatracing_db
+    restart: always
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    # Remove ports to make database accessible only within Docker network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FATRACING Bot Service
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: fatracing_bot_dev
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=development
+      - BOT_TOKEN=${BOT_TOKEN}
+      - BOT_USERNAME=${BOT_USERNAME}
+      - FATRACING_CHANNEL_ID=${FATRACING_CHANNEL_ID}
+      - ADMIN_USER_IDS=${ADMIN_USER_IDS}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - ./logs:/app/logs
+    env_file:
+      - .env
+
+  # Admin Panel Service
+  admin:
+    build:
+      context: .
+      dockerfile: Dockerfile.admin.dev
+    container_name: fatracing_admin_dev
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=development
+      - BOT_TOKEN=${BOT_TOKEN}
+      - FATRACING_CHANNEL_ID=${FATRACING_CHANNEL_ID}
+      - ADMIN_USER_IDS=${ADMIN_USER_IDS}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - ADMIN_PORT=3000
+    ports:
+      - "3004:3000"  # Map host port 3004 to container port 3000
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - ./logs:/app/logs
+    env_file:
+      - .env
+
+volumes:
+  db_data:

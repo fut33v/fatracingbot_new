@@ -1,0 +1,31 @@
+# Use Node.js 18 as the base image
+FROM node:18-alpine
+
+# Install Python and psycopg2 dependencies
+RUN apk add --no-cache python3 py3-pip py3-psycopg2 postgresql-dev gcc python3-dev musl-dev
+
+# Set the working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install all dependencies (including devDependencies for nodemon)
+RUN npm ci
+
+# Copy the rest of the application code
+COPY . .
+
+# Create logs directory
+RUN mkdir -p logs
+
+# Copy entrypoint script and set permissions
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+# Expose the bot port (if needed)
+EXPOSE 3000
+
+# Use entrypoint script to initialize database before starting bot
+ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["npm", "run", "dev"]
