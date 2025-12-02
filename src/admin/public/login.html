@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FATRACING Admin - Login</title>
+    <link rel="icon" type="image/png" href="/logo.png">
     <script async src="https://telegram.org/js/telegram-widget.js?22"></script>
     <style>
         body {
@@ -29,9 +30,19 @@
             text-align: center;
             margin-bottom: 2rem;
         }
-        .login-header h1 {
+        .brand {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 1.25rem;
+            font-weight: 700;
             color: #2c3e50;
-            margin-bottom: 0.5rem;
+            margin: 0;
+        }
+        .brand img {
+            height: 36px;
+            width: 36px;
+            object-fit: contain;
         }
         .btn {
             display: inline-block;
@@ -79,7 +90,10 @@
 <body>
     <div class="login-container">
         <div class="login-header">
-            <h1>🚴 FATRACING Admin</h1>
+            <div class="brand">
+                <img src="/logo.png" alt="FATRACING">
+                <span>FATRACING Admin</span>
+            </div>
             <p>Вход для администраторов</p>
         </div>
         
