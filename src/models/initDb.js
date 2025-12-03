@@ -15,12 +15,15 @@ async function initDatabase() {
     }
     
     const schema = fs.readFileSync(schemaPath, 'utf8');
+    // Remove comments so statements don't get skipped when they start with them
+    const withoutBlockComments = schema.replace(/\/\*[\s\S]*?\*\//g, '');
+    const withoutLineComments = withoutBlockComments.replace(/^[ \t]*--.*$/gm, '');
     
     // Split the schema into individual statements
-    const statements = schema
+    const statements = withoutLineComments
       .split(';')
       .map(stmt => stmt.trim())
-      .filter(stmt => stmt.length > 0 && !stmt.startsWith('--') && !stmt.startsWith('/*'));
+      .filter(stmt => stmt.length > 0);
     
     console.log(`Found ${statements.length} statements to execute`);
     

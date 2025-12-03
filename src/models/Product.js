@@ -8,7 +8,12 @@ class Product {
     this.shippingIncluded = Boolean(data.shipping_included);
     this.shippingCost = data.shipping_cost !== undefined && data.shipping_cost !== null ? parseFloat(data.shipping_cost) : 0;
     this.currency = data.currency;
-    this.photoUrl = data.photo_url;
+    const rawImages = Array.isArray(data.images) ? data.images.filter(Boolean) : [];
+    if (data.photo_url && !rawImages.includes(data.photo_url)) {
+      rawImages.unshift(data.photo_url);
+    }
+    this.images = rawImages;
+    this.photoUrl = this.images[0] || null;
     this.stock = parseInt(data.stock);
     this.isPreorder = Boolean(data.is_preorder);
     this.preorderEndDate = data.preorder_end_date ? new Date(data.preorder_end_date) : null;

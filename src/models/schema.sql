@@ -43,6 +43,17 @@ CREATE TABLE IF NOT EXISTS products (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Product images table (supports multiple images per product)
+CREATE TABLE IF NOT EXISTS product_images (
+    id SERIAL PRIMARY KEY,
+    product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+    url VARCHAR(512) NOT NULL,
+    position INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_product_images_product_id ON product_images(product_id);
+CREATE INDEX IF NOT EXISTS idx_product_images_position ON product_images(position);
+
 -- Product variants (sizes, colors, etc.)
 CREATE TABLE IF NOT EXISTS product_variants (
     id SERIAL PRIMARY KEY,

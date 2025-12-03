@@ -9,6 +9,28 @@ const db = require('../models/database');
 const BroadcastService = require('../services/broadcastService');
 const { requireAdmin } = require('./middleware/auth');
 const BOT_USERNAME = (process.env.BOT_USERNAME || 'fatracingbot').replace(/^@/, '');
+const PRODUCT_WITH_IMAGES_QUERY = `
+  SELECT p.*,
+    COALESCE(
+      json_agg(pi.url ORDER BY pi.position, pi.id) FILTER (WHERE pi.id IS NOT NULL),
+      '[]'::json
+    ) AS images
+  FROM products p
+  LEFT JOIN product_images pi ON pi.product_id = p.id
+  WHERE p.id = $1
+  GROUP BY p.id
+`;
+const ALL_PRODUCTS_WITH_IMAGES_QUERY = `
+  SELECT p.*,
+    COALESCE(
+      json_agg(pi.url ORDER BY pi.position, pi.id) FILTER (WHERE pi.id IS NOT NULL),
+      '[]'::json
+    ) AS images
+  FROM products p
+  LEFT JOIN product_images pi ON pi.product_id = p.id
+  GROUP BY p.id
+  ORDER BY p.created_at DESC
+`;
 
 // Escape MarkdownV2 specials while preserving common formatting tokens.
 // We leave *, _, [, ], (, ), ~, `, >, # intact when they are part of links/bold,
@@ -19,6 +41,37 @@ function escapeMarkdownV2(text = '') {
     .replace(/\./g, '\\.')
     .replace(/-/g, '\\-')
     .replace(/\+/g, '\\+');
+}
+
+function normalizeProductImages(imagesInput, photoUrl) {
+  const images = Array.isArray(imagesInput)
+    ? imagesInput
+        .filter(url => typeof url === 'string')
+        .map(url => url.trim())
+        .filter(Boolean)
+    : [];
+
+  if (photoUrl && !images.includes(photoUrl)) {
+    images.unshift(photoUrl);
+  }
+  return images;
+}
+
+async function saveProductImages(client, productId, images) {
+  await client.query('DELETE FROM product_images WHERE product_id = $1', [productId]);
+  if (!images || images.length === 0) return;
+
+  for (let i = 0; i < images.length; i += 1) {
+    await client.query(
+      'INSERT INTO product_images (product_id, url, position) VALUES ($1, $2, $3)',
+      [productId, images[i], i]
+    );
+  }
+}
+
+async function fetchProductWithImages(productId) {
+  const result = await db.query(PRODUCT_WITH_IMAGES_QUERY, [productId]);
+  return result.rows[0] || null;
 }
 
 const app = express();
@@ -243,7 +296,7 @@ app.get('/api/products', requireAdmin, async (req, res) => {
   try {
     console.log('Products requested by user:', req.session.user.first_name);
     
-    const result = await db.query('SELECT * FROM products ORDER BY created_at DESC');
+    const result = await db.query(ALL_PRODUCTS_WITH_IMAGES_QUERY);
     res.json(result.rows);
   } catch (error) {
     console.error('Error fetching products:', error);
@@ -257,11 +310,11 @@ app.get('/api/products', requireAdmin, async (req, res) => {
 app.get('/api/products/:id', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const result = await db.query('SELECT * FROM products WHERE id = $1', [id]);
-    if (result.rows.length === 0) {
+    const product = await fetchProductWithImages(id);
+    if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
-    res.json(result.rows[0]);
+    res.json(product);
   } catch (error) {
     console.error('Error fetching product:', error);
     res.status(500).json({
@@ -273,29 +326,60 @@ app.get('/api/products/:id', requireAdmin, async (req, res) => {
 // Create a new product
 app.post('/api/products', requireAdmin, async (req, res) => {
   try {
-    const { name, description, price, cost, shipping_included, shipping_cost, currency, stock, photo_url, status, is_preorder, preorder_end_date, estimated_delivery_date } = req.body;
-    
-    const result = await db.query(
-      `INSERT INTO products (name, description, price, cost, shipping_included, shipping_cost, currency, stock, photo_url, status, is_preorder, preorder_end_date, estimated_delivery_date)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
-      [
-        name,
-        description,
-        price,
-        cost || 0,
-        shipping_included === true,
-        shipping_cost || 0,
-        currency || 'RUB',
-        stock || 0,
-        photo_url || null,
-        status || 'active',
-        is_preorder === true,
-        preorder_end_date || null,
-        estimated_delivery_date || null
-      ]
-    );
-    
-    res.json(result.rows[0]);
+    const {
+      name,
+      description,
+      price,
+      cost,
+      shipping_included,
+      shipping_cost,
+      currency,
+      stock,
+      photo_url,
+      images,
+      status,
+      is_preorder,
+      preorder_end_date,
+      estimated_delivery_date
+    } = req.body;
+    const normalizedImages = normalizeProductImages(images, photo_url);
+    const coverUrl = normalizedImages[0] || photo_url || null;
+    const client = await db.getClient();
+
+    try {
+      await client.query('BEGIN');
+      const insertResult = await client.query(
+        `INSERT INTO products (name, description, price, cost, shipping_included, shipping_cost, currency, stock, photo_url, status, is_preorder, preorder_end_date, estimated_delivery_date)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
+        [
+          name,
+          description,
+          price,
+          cost || 0,
+          shipping_included === true,
+          shipping_cost || 0,
+          currency || 'RUB',
+          stock || 0,
+          coverUrl,
+          status || 'active',
+          is_preorder === true,
+          preorder_end_date || null,
+          estimated_delivery_date || null
+        ]
+      );
+
+      const productId = insertResult.rows[0].id;
+      await saveProductImages(client, productId, normalizedImages);
+      await client.query('COMMIT');
+
+      const created = await fetchProductWithImages(productId);
+      res.json(created || insertResult.rows[0]);
+    } catch (dbError) {
+      await client.query('ROLLBACK');
+      throw dbError;
+    } finally {
+      client.release();
+    }
   } catch (error) {
     console.error('Error creating product:', error);
     res.status(500).json({
@@ -308,24 +392,77 @@ app.post('/api/products', requireAdmin, async (req, res) => {
 app.put('/api/products/:id', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, price, cost, shipping_included, shipping_cost, currency, stock, photo_url, status, is_preorder, preorder_end_date, estimated_delivery_date } = req.body;
-    
-    const result = await db.query(
-      `UPDATE products
-       SET name = $1, description = $2, price = $3, cost = $4, shipping_included = $5, shipping_cost = $6, currency = $7, stock = $8, photo_url = $9, status = $10, is_preorder = $11,
-           preorder_end_date = $12, estimated_delivery_date = $13, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $14 RETURNING *`,
-      [name, description, price, cost || 0, shipping_included === true, shipping_cost || 0, currency, stock, photo_url, status, is_preorder === true, preorder_end_date || null, estimated_delivery_date || null, id]
-    );
-    
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        error: 'Product not found'
-      });
+    const {
+      name,
+      description,
+      price,
+      cost,
+      shipping_included,
+      shipping_cost,
+      currency,
+      stock,
+      photo_url,
+      images,
+      status,
+      is_preorder,
+      preorder_end_date,
+      estimated_delivery_date
+    } = req.body;
+
+    const existing = await fetchProductWithImages(id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Product not found' });
     }
-    
-    res.json(result.rows[0]);
+
+    const normalizedImages = images === undefined
+      ? normalizeProductImages(existing.images || [], photo_url || existing.photo_url)
+      : normalizeProductImages(images, photo_url || existing.photo_url);
+    const coverUrl = normalizedImages[0] || null;
+    const client = await db.getClient();
+
+    try {
+      await client.query('BEGIN');
+      const result = await client.query(
+        `UPDATE products
+         SET name = $1, description = $2, price = $3, cost = $4, shipping_included = $5, shipping_cost = $6, currency = $7, stock = $8, photo_url = $9, status = $10, is_preorder = $11,
+             preorder_end_date = $12, estimated_delivery_date = $13, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $14 RETURNING id`,
+        [
+          name,
+          description,
+          price,
+          cost || 0,
+          shipping_included === true,
+          shipping_cost || 0,
+          currency,
+          stock,
+          coverUrl,
+          status,
+          is_preorder === true,
+          preorder_end_date || null,
+          estimated_delivery_date || null,
+          id
+        ]
+      );
+
+      if (result.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          error: 'Product not found'
+        });
+      }
+
+      await saveProductImages(client, id, normalizedImages);
+      await client.query('COMMIT');
+
+      const updated = await fetchProductWithImages(id);
+      res.json(updated || { ...existing, photo_url: coverUrl, images: normalizedImages });
+    } catch (dbError) {
+      await client.query('ROLLBACK');
+      throw dbError;
+    } finally {
+      client.release();
+    }
   } catch (error) {
     console.error('Error updating product:', error);
     res.status(500).json({

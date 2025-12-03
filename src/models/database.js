@@ -33,4 +33,5 @@ module.exports = {
     console.log('Executing query:', text.substring(0, 100) + (text.length > 100 ? '...' : ''));
     return pool.query(text, params);
   },
+  getClient: async () => pool.connect(),
 };

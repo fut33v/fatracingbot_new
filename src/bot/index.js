@@ -209,7 +209,9 @@ bot.action(/product_(\d+)/, async (ctx) => {
     await sendProductView(ctx, {
       message,
       keyboard,
-      photoUrl: product.photoUrl
+      photoUrl: product.photoUrl,
+      images: product.images || [],
+      productId: product.id
     });
     await ctx.answerCbQuery();
   } catch (error) {
@@ -248,7 +250,9 @@ bot.action(/variant_(\d+)_(\d+)/, async (ctx) => {
     await sendProductView(ctx, {
       message,
       keyboard,
-      photoUrl: product.photoUrl
+      photoUrl: product.photoUrl,
+      images: product.images || [],
+      productId: product.id
     });
     await ctx.answerCbQuery();
   } catch (error) {
@@ -1085,15 +1089,35 @@ function buildProductCaption(product, variant) {
 }
 
 // Send product view with photo when есть фото
-async function sendProductView(ctx, { message, keyboard, photoUrl }) {
+async function sendProductView(ctx, { message, keyboard, photoUrl, images = [], productId = null }) {
   const markup = Markup.inlineKeyboard(keyboard);
+  const gallery = Array.isArray(images) ? images.filter(Boolean) : [];
+  const hasGallery = productId && gallery.length > 0;
+  const cover = hasGallery ? gallery[0] : photoUrl;
+  const baseImages = hasGallery ? gallery : (photoUrl ? [photoUrl] : []);
+  const extraImages = []; // navigation replaces album sending
+
+  if (!ctx.session.productImages) ctx.session.productImages = {};
+  if (!ctx.session.productCaptions) ctx.session.productCaptions = {};
+  if (!ctx.session.productKeyboards) ctx.session.productKeyboards = {};
+  if (productId) {
+    ctx.session.productImages[productId] = baseImages;
+    ctx.session.productCaptions[productId] = message;
+    ctx.session.productKeyboards[productId] = keyboard;
+  }
+
+  const navRow = buildGalleryNavRow(productId, baseImages.length, 0);
+  const finalKeyboard = navRow.length ? Markup.inlineKeyboard([navRow, ...keyboard]) : markup;
+
   if (!photoUrl) {
     // Fallback to text-only
     if (ctx.update?.callback_query?.message?.message_id) {
-      await ctx.editMessageText(message, markup);
+      await ctx.editMessageText(message, finalKeyboard);
     } else {
-      await ctx.reply(message, markup);
+      await ctx.reply(message, finalKeyboard);
     }
+
+    await sendExtraImages(ctx, extraImages, productId);
     return;
   }
 
@@ -1101,19 +1125,114 @@ async function sendProductView(ctx, { message, keyboard, photoUrl }) {
     await ctx.editMessageMedia(
       {
         type: 'photo',
-        media: photoUrl,
+        media: cover,
         caption: message
       },
-      markup
+      finalKeyboard
     );
   } catch (error) {
     console.warn('editMessageMedia failed, sending new photo message', error.message);
-    await ctx.replyWithPhoto(photoUrl, {
+    await ctx.replyWithPhoto(cover, {
       caption: message,
-      ...markup
+      ...finalKeyboard
     });
   }
+
+  await sendExtraImages(ctx, extraImages, productId);
 }
+
+function buildGalleryNavRow(productId, total, currentIndex) {
+  if (!productId || total < 2) return [];
+  const prev = (currentIndex - 1 + total) % total;
+  const next = (currentIndex + 1) % total;
+  return [
+    Markup.button.callback('⬅️', `prodimg_${productId}_${prev}`),
+    Markup.button.callback(`${currentIndex + 1}/${total}`, 'noop'),
+    Markup.button.callback('➡️', `prodimg_${productId}_${next}`)
+  ];
+}
+
+async function sendExtraImages(ctx, extraImages, productId) {
+  if (!extraImages.length || ctx.session?.lastImagesProductId === productId) {
+    return;
+  }
+
+  try {
+    if (extraImages.length === 1) {
+      console.log('Sending single extra image for product', productId, extraImages[0]);
+      await ctx.replyWithPhoto(extraImages[0]);
+    } else {
+      console.log('Sending media group for product', productId, 'count', extraImages.length);
+      await ctx.replyWithMediaGroup(extraImages.map((url) => ({ type: 'photo', media: url })));
+    }
+  } catch (albumError) {
+    console.warn('Failed to send extra product images', albumError.message);
+  }
+  ctx.session.lastImagesProductId = productId;
+}
+
+// Navigate between product images
+bot.action(/prodimg_(\d+)_(\d+)/, async (ctx) => {
+  try {
+    const productId = ctx.match[1];
+    const targetIndex = parseInt(ctx.match[2], 10);
+    if (!ctx.session.productImages) ctx.session.productImages = {};
+    if (!ctx.session.productCaptions) ctx.session.productCaptions = {};
+    if (!ctx.session.productKeyboards) ctx.session.productKeyboards = {};
+
+    let images = ctx.session.productImages[productId] || [];
+    if (!images.length) {
+      const product = await ProductModel.getProductById(productId);
+      images = product?.images || (product?.photoUrl ? [product.photoUrl] : []);
+      ctx.session.productImages[productId] = images;
+      ctx.session.productCaptions[productId] = product ? buildProductCaption(product) : '';
+      ctx.session.productKeyboards[productId] = [
+        [Markup.button.callback('➕ В корзину', `add_to_cart_${productId}`)],
+        [Markup.button.callback('🛒 Корзина', 'cart')],
+        [Markup.button.callback('⬅️ Назад', 'shop')]
+      ];
+    }
+
+    if (!images.length) {
+      await ctx.answerCbQuery('Нет изображений');
+      return;
+    }
+
+    const safeIndex = ((targetIndex % images.length) + images.length) % images.length;
+    const media = images[safeIndex];
+    const caption = ctx.session.productCaptions[productId] || '';
+    const baseKeyboard = ctx.session.productKeyboards[productId] || [];
+    const navRow = buildGalleryNavRow(productId, images.length, safeIndex);
+    const finalKeyboard = navRow.length ? Markup.inlineKeyboard([navRow, ...baseKeyboard]) : Markup.inlineKeyboard(baseKeyboard);
+
+    try {
+      await ctx.editMessageMedia(
+        { type: 'photo', media, caption },
+        finalKeyboard
+      );
+    } catch (error) {
+      console.warn('Failed to edit media on navigation, sending new photo', error.message);
+      await ctx.replyWithPhoto(media, { caption, ...finalKeyboard });
+    }
+
+    await ctx.answerCbQuery();
+  } catch (error) {
+    console.error('Error navigating product images:', error);
+    try {
+      await ctx.answerCbQuery('Не удалось переключить изображение');
+    } catch (e) {
+      console.error('Failed to answer cbq in nav handler', e);
+    }
+  }
+});
+
+bot.action('noop', async (ctx) => {
+  try {
+    await ctx.answerCbQuery();
+  } catch (error) {
+    console.error('Failed to answer noop cbq', error);
+  }
+});
 
 // Helper to show user's orders
 async function showUserOrders(ctx, { fromCallback = false } = {}) {

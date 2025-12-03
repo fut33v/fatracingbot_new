@@ -242,6 +242,7 @@
             '#/broadcasts': loadBroadcasts,
             '#/users': loadUsers
         };
+        let productImageRowCounter = 0;
 
         window.addEventListener('hashchange', () => handleRouteChange());
 
@@ -679,6 +680,10 @@
         }
 
         function renderProductForm(mode, product = {}) {
+            const images = Array.isArray(product.images) && product.images.length
+                ? product.images
+                : (product.photo_url ? [product.photo_url] : ['']);
+            productImageRowCounter = 0;
             const title = mode === 'edit' ? `Редактировать товар #${product.id}` : 'Добавить товар';
             document.getElementById('content').innerHTML = `
                 <h2>${title}</h2>
@@ -750,17 +755,7 @@
                             <input id="product-estimated-delivery" type="date" value="${product.estimated_delivery_date ? new Date(product.estimated_delivery_date).toISOString().split('T')[0] : ''}" />
                         </div>
                     </div>
-                    <div class="form-group">
-                        <label for="product-photo">Ссылка на фото (необязательно)</label>
-                        <input id="product-photo" type="text" placeholder="https://..." value="${product.photo_url || ''}" />
-                        ${product.photo_url ? `<small>Текущее изображение: <a href="${product.photo_url}" target="_blank">${product.photo_url}</a></small>` : ''}
-                    </div>
-                    <div class="form-group">
-                        <label for="product-upload">Загрузить изображение</label>
-                        <input id="product-upload" type="file" accept="image/*" />
-                        <button class="btn" style="margin-top:8px;" onclick="uploadProductImage()">Загрузить и подставить ссылку</button>
-                        <small>Можно выбрать файл — ссылка автоматически попадет в поле выше.</small>
-                    </div>
+                    ${renderProductImagesSection(images)}
                     <div style="display: flex; gap: 12px; flex-wrap: wrap;">
                         ${mode === 'edit' ? `
                             <button class="btn btn-success" onclick="updateProduct(${product.id})">Сохранить</button>
@@ -779,14 +774,87 @@
             renderProductForm('add');
         }
 
-        async function uploadProductImage() {
+        function renderProductImagesSection(images = []) {
+            const prepared = images.length ? images : [''];
+            const rowsHtml = prepared.map((url, index) => renderProductImageRow(url, `existing-${index}`)).join('');
+            return `
+                <div class="form-group">
+                    <label>Изображения товара</label>
+                    <div id="product-images-list">
+                        ${rowsHtml || renderProductImageRow('', 'existing-0')}
+                    </div>
+                    <button class="btn" type="button" onclick="addProductImageRow()">Добавить изображение</button>
+                    <small>Первое изображение станет обложкой товара.</small>
+                </div>
+            `;
+        }
+
+        function nextProductImageKey(customKey) {
+            if (customKey) return customKey;
+            productImageRowCounter += 1;
+            return `img-${Date.now()}-${productImageRowCounter}`;
+        }
+
+        function renderProductImageRow(url = '', key) {
+            const rowKey = nextProductImageKey(key);
+            return `
+                <div class="product-image-row" data-key="${rowKey}" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+                    <input id="product-photo-${rowKey}" class="product-image-input" type="text" placeholder="https://..." value="${url || ''}" />
+                    <input id="product-upload-${rowKey}" type="file" accept="image/*" />
+                    <button class="btn" type="button" onclick="uploadProductImage('${rowKey}')">Загрузить</button>
+                    <button class="btn btn-secondary" type="button" onclick="removeProductImageRow('${rowKey}')">Убрать</button>
+                    ${url ? `<img src="${url}" alt="Изображение товара" style="height:60px; width:60px; object-fit:cover; border:1px solid #eee; border-radius:4px;"> <a href="${url}" target="_blank">Открыть</a>` : ''}
+                </div>
+            `;
+        }
+
+        function addProductImageRow(url = '') {
+            const container = document.getElementById('product-images-list');
+            if (!container) return;
+            container.insertAdjacentHTML('beforeend', renderProductImageRow(url));
+        }
+
+        function removeProductImageRow(key) {
+            const row = document.querySelector('.product-image-row[data-key="' + key + '"]');
+            if (row) {
+                row.remove();
+            }
+            const rowsLeft = document.querySelectorAll('.product-image-row').length;
+            if (rowsLeft === 0) {
+                addProductImageRow();
+            }
+        }
+
+        async function uploadProductImage(key) {
             try {
-                await uploadSelectedFile(true, 'product-upload', 'product-photo');
+                await uploadSelectedFile(true, `product-upload-${key}`, `product-photo-${key}`);
             } catch (error) {
                 if (error.message === 'file-too-large') return;
                 console.error('Error uploading product image:', error);
                 alert('Не удалось загрузить изображение');
             }
+        }
+
+        async function uploadPendingProductImages() {
+            const rows = document.querySelectorAll('.product-image-row');
+            for (const row of rows) {
+                const key = row.getAttribute('data-key');
+                const fileInput = document.getElementById(`product-upload-${key}`);
+                const urlInput = document.getElementById(`product-photo-${key}`);
+                if (fileInput?.files?.length) {
+                    const uploadedUrl = await uploadSelectedFile(true, `product-upload-${key}`, `product-photo-${key}`);
+                    if (uploadedUrl && urlInput) {
+                        urlInput.value = uploadedUrl;
+                    }
+                }
+            }
+        }
+
+        function collectProductImages() {
+            const inputs = document.querySelectorAll('.product-image-input');
+            return Array.from(inputs)
+                .map(input => input.value.trim())
+                .filter(Boolean);
         }
 
         // Toggle shipping cost visibility
@@ -813,7 +881,6 @@
             const is_preorder = document.getElementById('product-preorder').checked;
             const preorder_end_date = document.getElementById('product-preorder-end').value || null;
             const estimated_delivery_date = document.getElementById('product-estimated-delivery').value || null;
-            let photo_url = document.getElementById('product-photo').value.trim();
 
             if (!name) {
                 alert('Введите название товара');
@@ -837,15 +904,16 @@
             }
 
             try {
-                const uploadedUrl = await uploadSelectedFile(!photo_url, 'product-upload', 'product-photo');
-                photo_url = photo_url || uploadedUrl || null;
+                await uploadPendingProductImages();
             } catch (error) {
                 if (error.message !== 'file-too-large') {
-                    console.error('Error uploading product image:', error);
-                    alert('Ошибка при загрузке изображения');
+                    console.error('Error uploading product images:', error);
+                    alert('Ошибка при загрузке изображений');
                 }
                 return;
             }
+
+            const images = collectProductImages();
 
             try {
                 const response = await fetch('/api/products', {
@@ -861,7 +929,7 @@
                         shipping_cost: shippingIncluded ? (Number.isNaN(shippingCostValue) ? 0 : shippingCostValue) : 0,
                         currency,
                         stock: stockValue,
-                        photo_url,
+                        images,
                         status,
                         is_preorder,
                         preorder_end_date,
@@ -914,7 +982,6 @@
             const is_preorder = document.getElementById('product-preorder').checked;
             const preorder_end_date = document.getElementById('product-preorder-end').value || null;
             const estimated_delivery_date = document.getElementById('product-estimated-delivery').value || null;
-            let photo_url = document.getElementById('product-photo').value.trim();
 
             if (!name) {
                 alert('Введите название товара');
@@ -938,15 +1005,16 @@
             }
 
             try {
-                const uploadedUrl = await uploadSelectedFile(!photo_url, 'product-upload', 'product-photo');
-                photo_url = photo_url || uploadedUrl || null;
+                await uploadPendingProductImages();
             } catch (error) {
                 if (error.message !== 'file-too-large') {
-                    console.error('Error uploading product image:', error);
-                    alert('Ошибка при загрузке изображения');
+                    console.error('Error uploading product images:', error);
+                    alert('Ошибка при загрузке изображений');
                 }
                 return;
             }
+
+            const images = collectProductImages();
 
             try {
                 const response = await fetch(`/api/products/${id}`, {
@@ -962,7 +1030,7 @@
                         shipping_cost: shippingIncluded ? (Number.isNaN(shippingCostValue) ? 0 : shippingCostValue) : 0,
                         currency,
                         stock: stockValue,
-                        photo_url,
+                        images,
                         status,
                         is_preorder,
                         preorder_end_date,
