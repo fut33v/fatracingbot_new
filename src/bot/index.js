@@ -474,8 +474,7 @@ bot.on('text', async (ctx) => {
         ctx.session.comment = text === 'нет' ? '' : text;
         ctx.session.checkoutStep = 'payment_proof';
         await ctx.reply(
-          '💳 Оплатите переводом по СБП (Т-Банк/Сбер) на номер 89633345452.\n' +
-          '📸 После оплаты отправьте сюда скриншот перевода, чтобы завершить заказ.',
+          await buildPaymentRequestMessage(userId),
           buildPaymentProofKeyboard()
         );
         break;
@@ -594,8 +593,7 @@ bot.action('comment_none', async (ctx) => {
   ctx.session.checkoutStep = 'payment_proof';
   await ctx.answerCbQuery('Комментарий не нужен');
   await ctx.reply(
-    '💳 Оплатите переводом по СБП (Т-Банк/Сбер) на номер 89633345452.\n' +
-    '📸 После оплаты отправьте сюда скриншот перевода, чтобы завершить заказ.',
+    await buildPaymentRequestMessage(ctx.from.id),
     buildPaymentProofKeyboard()
   );
 });
@@ -856,6 +854,24 @@ function buildPaymentProofKeyboard() {
   return Markup.inlineKeyboard([
     [Markup.button.callback('❌ Отменить оформление', 'cancel_checkout')]
   ]);
+}
+
+async function buildPaymentRequestMessage(userId) {
+  try {
+    const total = Number(await CartModel.getCartTotal(userId)) || 0;
+    const amountText = total > 0 ? `Сумма к оплате: ${total.toFixed(2)} RUB\n` : '';
+    return (
+      '💳 Оплатите переводом по СБП (Т-Банк/Сбер) на номер 89633345452.\n' +
+      amountText +
+      '📸 После оплаты отправьте сюда скриншот перевода, чтобы завершить заказ.'
+    );
+  } catch (error) {
+    console.error('Failed to build payment request message:', error);
+    return (
+      '💳 Оплатите переводом по СБП (Т-Банк/Сбер) на номер 89633345452.\n' +
+      '📸 После оплаты отправьте сюда скриншот перевода, чтобы завершить заказ.'
+    );
+  }
 }
 
 // Abort checkout flow if cart emptied mid-process
