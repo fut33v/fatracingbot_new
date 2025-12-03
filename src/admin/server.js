@@ -8,6 +8,7 @@ const https = require('https');
 const db = require('../models/database');
 const BroadcastService = require('../services/broadcastService');
 const { requireAdmin } = require('./middleware/auth');
+const BOT_USERNAME = (process.env.BOT_USERNAME || 'fatracingbot').replace(/^@/, '');
 
 // Escape MarkdownV2 specials while preserving common formatting tokens.
 // We leave *, _, [, ], (, ), ~, `, >, # intact when they are part of links/bold,
@@ -153,7 +154,11 @@ app.get('/', (req, res) => {
 // Serve login page
 app.get('/login.html', (req, res) => {
   try {
-    res.sendFile(path.join(__dirname, 'public', 'login.html'));
+    const loginPath = path.join(__dirname, 'public', 'login.html');
+    const raw = fs.readFileSync(loginPath, 'utf8');
+    const rendered = raw.replace(/__BOT_USERNAME__/g, BOT_USERNAME);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(rendered);
   } catch (error) {
     console.error('Error serving login.html:', error);
     res.status(500).json({ error: 'Failed to serve login page' });
