@@ -28,17 +28,30 @@ async function seedDatabase() {
         description: 'Бутылка для воды 500мл с логотипом FATRACING. Пищевой пластик, удобная крышка.',
         price: 600.00,
         currency: 'RUB',
-        stock: 30
+        stock: 30,
+        is_preorder: true,
+        preorder_end_date: '2025-01-31',
+        estimated_delivery_date: '2025-02-15'
       }
     ];
     
     for (const product of products) {
       try {
         await db.query(`
-          INSERT INTO products (name, description, price, currency, stock, status)
-          VALUES ($1, $2, $3, $4, $5, $6)
+          INSERT INTO products (name, description, price, currency, stock, status, is_preorder, preorder_end_date, estimated_delivery_date)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
           ON CONFLICT DO NOTHING`,
-          [product.name, product.description, product.price, product.currency, product.stock, 'active']
+          [
+            product.name,
+            product.description,
+            product.price,
+            product.currency,
+            product.stock,
+            'active',
+            product.is_preorder || false,
+            product.preorder_end_date || null,
+            product.estimated_delivery_date || null
+          ]
         );
         console.log(`✅ Inserted product: ${product.name}`);
       } catch (error) {

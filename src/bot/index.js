@@ -1,11 +1,14 @@
 require('dotenv').config();
-const { Telegraf, Markup } = require('telegraf');
+const { Telegraf, Markup, session } = require('telegraf');
 const UserModel = require('../models/userModel');
 const ProductModel = require('../models/productModel');
 const PromoCodeModel = require('../models/promoCodeModel');
 const CartModel = require('../models/cartModel');
 const OrderModel = require('../models/orderModel');
 const ChannelMembershipModel = require('../models/channelMembershipModel');
+const https = require('https');
+
+const MAX_PVZ_OPTIONS = 5;
 
 // Initialize the bot
 const bot = new Telegraf(process.env.BOT_TOKEN);
@@ -13,6 +16,7 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 console.log('Starting FATRACING Bot...');
 
 // Middleware to track user interactions
+bot.use(session());
 bot.use(async (ctx, next) => {
   if (ctx.from) {
     try {
@@ -20,6 +24,10 @@ bot.use(async (ctx, next) => {
     } catch (error) {
       console.error('Error upserting user:', error);
     }
+  }
+  // Ensure ctx.session exists to avoid undefined usage later
+  if (!ctx.session) {
+    ctx.session = {};
   }
   await next();
 });
@@ -69,8 +77,21 @@ bot.command('menu', async (ctx) => {
 // Main menu callback
 bot.action('main_menu', async (ctx) => {
   try {
-    await ctx.editMessageText('Выбери интересующий раздел:', getMenuKeyboard());
-    await ctx.answerCbQuery();
+    const keyboard = getMenuKeyboard();
+    const hasCbMsg = Boolean(ctx.update?.callback_query?.message?.message_id);
+    if (hasCbMsg) {
+      try {
+        await ctx.editMessageText('Выбери интересующий раздел:', keyboard);
+        await ctx.answerCbQuery();
+        return;
+      } catch (error) {
+        console.warn('editMessageText failed in main_menu, sending new message', error.description || error.message);
+      }
+    }
+    await ctx.reply('Выбери интересующий раздел:', keyboard);
+    if (ctx.update?.callback_query) {
+      await ctx.answerCbQuery();
+    }
   } catch (error) {
     console.error('Error in main_menu action:', error);
     try {
@@ -83,41 +104,71 @@ bot.action('main_menu', async (ctx) => {
 
 // Shop menu
 bot.action('shop', async (ctx) => {
+  await showShop(ctx, { fromCallback: true });
+});
+
+// Text handler for shop from reply keyboard
+bot.hears('🛒 Магазин мерча', async (ctx) => {
+  await showShop(ctx, { fromCallback: false });
+});
+
+async function showShop(ctx, { fromCallback }) {
   try {
     const products = await ProductModel.getActiveProducts();
     
     if (products.length === 0) {
-      await ctx.reply('🛒 Магазин временно пуст. Следи за новостями!', getMenuKeyboard());
+      const emptyMsg = '🛒 Магазин временно пуст. Следи за новостями!';
+      if (fromCallback && ctx.update?.callback_query?.message?.message_id) {
+        const kb = Markup.inlineKeyboard([[Markup.button.callback('⬅️ Назад', 'main_menu')]]);
+        await ctx.editMessageText(emptyMsg, kb);
+        await ctx.answerCbQuery();
+      } else {
+        await ctx.reply(emptyMsg, getMenuKeyboard());
+      }
       return;
     }
     
     let message = '🛒 Доступные товары:\n\n';
     
     for (const product of products) {
-      message += `🔹 ${product.name}\n`;
-      message += `   ${product.description}\n`;
-      message += `   💰 ${product.getFormattedPrice()}\n`;
-      message += `   📦 В наличии: ${product.stock} шт.\n\n`;
+      const preorderTag = product.isPreorder ? ' (предзаказ)' : '';
+      message += `🔹 ${product.name}${preorderTag}\n`;
     }
     
     const keyboard = [
       ...products.map(product => [
-        Markup.button.callback(`🛒 ${product.name}`, `product_${product.id}`)
+        Markup.button.callback(`🎽 ${product.name}`, `product_${product.id}`)
       ]),
+      [Markup.button.callback('📦 Мои заказы', 'my_orders')],
+      [Markup.button.callback('🛒 Корзина', 'cart')],
       [Markup.button.callback('⬅️ Назад', 'main_menu')]
     ];
     
-    await ctx.editMessageText(message, Markup.inlineKeyboard(keyboard));
-    await ctx.answerCbQuery();
+    const markup = Markup.inlineKeyboard(keyboard);
+    if (fromCallback && ctx.update?.callback_query?.message?.message_id) {
+      try {
+        await ctx.editMessageText(message, markup);
+      } catch (error) {
+        console.warn('editMessageText failed in showShop, sending new message', error.description || error.message);
+        await ctx.reply(message, markup);
+      }
+      await ctx.answerCbQuery();
+    } else {
+      await ctx.reply(message, markup);
+    }
   } catch (error) {
     console.error('Error in shop action:', error);
     try {
-      await ctx.answerCbQuery('❌ Произошла ошибка, попробуйте позже');
+      if (fromCallback) {
+        await ctx.answerCbQuery('❌ Произошла ошибка, попробуйте позже');
+      } else {
+        await ctx.reply('❌ Произошла ошибка, попробуйте позже');
+      }
     } catch (callbackError) {
       console.error('Failed to send callback query:', callbackError);
     }
   }
-});
+}
 
 // Product details
 bot.action(/product_(\d+)/, async (ctx) => {
@@ -132,10 +183,7 @@ bot.action(/product_(\d+)/, async (ctx) => {
     
     const variants = await ProductModel.getProductVariants(productId);
     
-    let message = `🛒 ${product.name}\n\n`;
-    message += `${product.description}\n\n`;
-    message += `💰 Цена: ${product.getFormattedPrice()}\n`;
-    message += `📦 В наличии: ${product.stock} шт.\n`;
+    const message = buildProductCaption(product);
     
     const keyboard = [];
     
@@ -148,7 +196,7 @@ bot.action(/product_(\d+)/, async (ctx) => {
       );
     } else {
       keyboard.push([
-        Markup.button.callback('🛒 Добавить в корзину', `add_to_cart_${product.id}`)
+        Markup.button.callback('➕ В корзину', `add_to_cart_${product.id}`)
       ]);
     }
     
@@ -157,7 +205,11 @@ bot.action(/product_(\d+)/, async (ctx) => {
       Markup.button.callback('⬅️ Назад', 'shop')
     ]);
     
-    await ctx.editMessageText(message, Markup.inlineKeyboard(keyboard));
+    await sendProductView(ctx, {
+      message,
+      keyboard,
+      photoUrl: product.photoUrl
+    });
     await ctx.answerCbQuery();
   } catch (error) {
     console.error('Error in product action:', error);
@@ -184,18 +236,19 @@ bot.action(/variant_(\d+)_(\d+)/, async (ctx) => {
       return;
     }
     
-    let message = `🛒 ${product.name} (${selectedVariant.name})\n\n`;
-    message += `${product.description}\n\n`;
-    message += `💰 Цена: ${product.getFormattedPrice()}\n`;
-    message += `📦 В наличии: ${selectedVariant.stock} шт.\n`;
+    const message = buildProductCaption(product, selectedVariant);
     
     const keyboard = [
-      [Markup.button.callback('🛒 Добавить в корзину', `add_to_cart_${productId}_${variantId}`)],
+      [Markup.button.callback('➕ В корзину', `add_to_cart_${productId}_${variantId}`)],
       [Markup.button.callback('🛒 Корзина', 'cart')],
       [Markup.button.callback('⬅️ Назад', `product_${productId}`)]
     ];
     
-    await ctx.editMessageText(message, Markup.inlineKeyboard(keyboard));
+    await sendProductView(ctx, {
+      message,
+      keyboard,
+      photoUrl: product.photoUrl
+    });
     await ctx.answerCbQuery();
   } catch (error) {
     console.error('Error in variant action:', error);
@@ -214,6 +267,10 @@ bot.action(/add_to_cart_(\d+)(_(\d+))?/, async (ctx) => {
   const variantId = ctx.match[3] || null;
   
   try {
+    // Ensure user exists for FK constraints
+    if (ctx.from) {
+      await UserModel.upsertUser(ctx.from);
+    }
     await CartModel.addToCart(userId, productId, variantId);
     await ctx.answerCbQuery('✅ Добавлено в корзину!');
     
@@ -227,6 +284,11 @@ bot.action(/add_to_cart_(\d+)(_(\d+))?/, async (ctx) => {
       console.error('Failed to send callback query:', callbackError);
     }
   }
+});
+
+// Show user's orders
+bot.action('my_orders', async (ctx) => {
+  await showUserOrders(ctx, { fromCallback: true });
 });
 
 // Show cart
@@ -275,7 +337,25 @@ bot.action('checkout', async (ctx) => {
     
     // Ask for customer name
     ctx.session = { checkoutStep: 'name' };
-    await ctx.reply('📝 Для оформления заказа укажите, как к вам обращаться:');
+
+    const lastOrder = await OrderModel.getLatestOrderForUser(userId);
+    const savedName = lastOrder?.customerName;
+    const savedCity = lastOrder?.cityCountry;
+
+    if (savedName && savedCity) {
+      ctx.session.customerName = savedName;
+      ctx.session.city = savedCity;
+      ctx.session.checkoutStep = 'comment';
+      await ctx.reply(
+        `Используем ранее указанные данные:\n` +
+        `👤 Имя: ${savedName}\n` +
+        `🌍 Город: ${savedCity}\n\n` +
+        '💬 Оставьте комментарий к заказу (или напишите "нет", если комментариев нет):',
+        buildPvzButtonKeyboard()
+      );
+    } else {
+      await ctx.reply('📝 Для оформления заказа укажите, как к вам обращаться:');
+    }
   } catch (error) {
     console.error('Error in checkout:', error);
     await ctx.reply('❌ Произошла ошибка при оформлении заказа');
@@ -290,6 +370,14 @@ bot.action('checkout', async (ctx) => {
 
 // Handle text messages during checkout
 bot.on('text', async (ctx) => {
+  if (ctx.session?.pvzStep === 'city') {
+    await handlePvzCityInput(ctx, ctx.message.text);
+    return;
+  }
+  if (ctx.session?.pvzStep === 'street') {
+    await handlePvzStreetInput(ctx, ctx.message.text);
+    return;
+  }
   if (!ctx.session || !ctx.session.checkoutStep) {
     // Not in checkout flow, ignore
     return;
@@ -302,28 +390,25 @@ bot.on('text', async (ctx) => {
     switch (ctx.session.checkoutStep) {
       case 'name':
         ctx.session.customerName = text;
-        ctx.session.checkoutStep = 'phone';
-        await ctx.reply('📱 Укажите ваш номер телефона:');
-        break;
-        
-      case 'phone':
-        ctx.session.phone = text;
         ctx.session.checkoutStep = 'city';
         await ctx.reply('🌍 Укажите ваш город/страну:');
         break;
-        
+
       case 'city':
-        ctx.session.city = text;
-        ctx.session.checkoutStep = 'comment';
-        await ctx.reply('💬 Оставьте комментарий к заказу (или напишите "нет", если комментариев нет):');
+        await handleCityInput(ctx, text);
         break;
-        
+
       case 'comment':
         ctx.session.comment = text === 'нет' ? '' : text;
-        ctx.session.checkoutStep = null;
-        
-        // Create order
-        await createOrder(ctx, userId);
+        ctx.session.checkoutStep = 'payment_proof';
+        await ctx.reply(
+          '💳 Оплатите переводом по СБП (Т-Банк/Сбер) на номер 89633345452.\n' +
+          '📸 После оплаты отправьте сюда скриншот перевода, чтобы завершить заказ.'
+        );
+        break;
+
+      case 'payment_proof':
+        await ctx.reply('Пожалуйста, отправьте скриншот перевода как фото сообщением.');
         break;
     }
   } catch (error) {
@@ -332,6 +417,318 @@ bot.on('text', async (ctx) => {
     ctx.session = {};
   }
 });
+
+bot.action(/city_pick_(\d+)/, async (ctx) => {
+  const idx = parseInt(ctx.match[1], 10);
+  if (!ctx.session || ctx.session.checkoutStep !== 'city_choice') {
+    return ctx.answerCbQuery();
+  }
+  const option = ctx.session.cityOptions?.[idx];
+  const original = ctx.session.pendingCity || '';
+  ctx.session.city = option?.address || original;
+  ctx.session.pendingPvzGeoId = option?.geo_id || null;
+  ctx.session.pvzStep = 'street';
+  ctx.session.checkoutStep = 'comment';
+  await ctx.answerCbQuery(option ? option.address : 'Город выбран');
+  await ctx.reply(`Город для ПВЗ: ${ctx.session.city}\nТеперь введите улицу для поиска ПВЗ:`);
+});
+
+bot.action('city_keep', async (ctx) => {
+  if (!ctx.session || ctx.session.checkoutStep !== 'city_choice') {
+    return ctx.answerCbQuery();
+  }
+  ctx.session.city = ctx.session.pendingCity || '';
+  ctx.session.pendingPvzGeoId = null;
+  ctx.session.pvzStep = 'street';
+  ctx.session.checkoutStep = 'comment';
+  await ctx.answerCbQuery('Используем ваш вариант');
+  await ctx.reply(`Город для ПВЗ: ${ctx.session.city}\nТеперь введите улицу для поиска ПВЗ:`);
+});
+
+bot.action('pvz_start', async (ctx) => {
+  ctx.session = ctx.session || {};
+  ctx.session.pvzStep = 'city';
+  ctx.session.pvzOptions = null;
+  ctx.session.pendingPvzCity = null;
+  await ctx.answerCbQuery();
+  await ctx.reply('Введите город для выбора ПВЗ:');
+});
+
+bot.action(/pvz_pick_(\d+)/, async (ctx) => {
+  if (!ctx.session || (ctx.session.pvzStep !== 'pvz_choice' && ctx.session.pvzStep !== 'street_choice')) {
+    return ctx.answerCbQuery();
+  }
+  const idx = parseInt(ctx.match[1], 10);
+  const option = ctx.session.pvzOptions?.[idx];
+  const original = ctx.session.pendingPvzCity || '';
+  if (ctx.session.pvzStep === 'pvz_choice') {
+    ctx.session.city = option?.address || original;
+    ctx.session.pendingPvzGeoId = option?.geo_id || null;
+    ctx.session.deliveryGeoId = ctx.session.pendingPvzGeoId;
+    ctx.session.pvzStep = 'street';
+    await ctx.answerCbQuery(option ? option.address : 'Город выбран');
+    await ctx.reply(`Город для ПВЗ: ${ctx.session.city}\nТеперь введите улицу для поиска ПВЗ:`);
+    return;
+  }
+
+  // street_choice: picking concrete PVZ
+  const label = formatPickupLabel(option);
+  ctx.session.pvzSelection = label || ctx.session.city;
+  ctx.session.deliveryPickupId = option?.id || option?.operator_station_id || null;
+  ctx.session.deliveryPickupAddress = label || null;
+  ctx.session.pvzStep = null;
+  ctx.session.checkoutStep = 'comment';
+  await ctx.answerCbQuery(label || 'ПВЗ выбран');
+  await ctx.reply(`ПВЗ выбран: ${ctx.session.pvzSelection}`);
+  await ctx.reply('💬 Оставьте комментарий к заказу (или напишите "нет", если комментариев нет):', buildCommentKeyboard());
+});
+
+bot.action('pvz_keep', async (ctx) => {
+  if (!ctx.session || ctx.session.pvzStep !== 'pvz_choice') {
+    return ctx.answerCbQuery();
+  }
+  ctx.session.city = ctx.session.pendingPvzCity || '';
+  ctx.session.pvzStep = 'street';
+  await ctx.answerCbQuery('Идём дальше');
+  await ctx.reply(`Город для ПВЗ: ${ctx.session.city}\nТеперь введите улицу для поиска ПВЗ:`);
+});
+
+bot.action('pvz_skip_pickpoint', async (ctx) => {
+  if (!ctx.session || ctx.session.pvzStep !== 'street_choice') {
+    return ctx.answerCbQuery();
+  }
+  ctx.session.pvzStep = null;
+  ctx.session.checkoutStep = 'comment';
+  ctx.session.deliveryPickupId = null;
+  ctx.session.deliveryPickupAddress = null;
+  await ctx.answerCbQuery('Идём дальше');
+  await ctx.reply('💬 Оставьте комментарий к заказу (или напишите "нет", если комментариев нет):', buildCommentKeyboard());
+});
+
+bot.action('comment_none', async (ctx) => {
+  ctx.session.comment = '';
+  ctx.session.checkoutStep = 'payment_proof';
+  await ctx.answerCbQuery('Комментарий не нужен');
+  await ctx.reply(
+    '💳 Оплатите переводом по СБП (Т-Банк/Сбер) на номер 89633345452.\n' +
+    '📸 После оплаты отправьте сюда скриншот перевода, чтобы завершить заказ.'
+  );
+});
+
+// Handle payment proof photo
+bot.on('photo', async (ctx) => {
+  if (!ctx.session || ctx.session.checkoutStep !== 'payment_proof') {
+    return;
+  }
+  const userId = ctx.from.id;
+  try {
+    const photos = ctx.message.photo || [];
+    const largest = photos[photos.length - 1];
+    if (!largest?.file_id) {
+      await ctx.reply('Не удалось прочитать файл. Попробуйте отправить скриншот ещё раз.');
+      return;
+    }
+
+    const fileLink = await ctx.telegram.getFileLink(largest.file_id);
+    ctx.session.paymentProofUrl = fileLink.href;
+    ctx.session.checkoutStep = null;
+
+    await createOrder(ctx, userId);
+  } catch (error) {
+    console.error('Error handling payment proof:', error);
+    await ctx.reply('❌ Не удалось получить скриншот. Попробуйте отправить ещё раз.');
+  }
+});
+
+async function handleCityInput(ctx, text) {
+  ctx.session.pendingCity = text;
+  const token = process.env.YANDEX_DELIVERY_TOKEN;
+  if (!token) {
+    ctx.session.city = text;
+    ctx.session.checkoutStep = 'comment';
+    await ctx.reply('💬 Оставьте комментарий к заказу (или напишите "нет", если комментариев нет):', buildPvzButtonKeyboard());
+    return;
+  }
+
+  try {
+    const variants = await detectCity(text, token);
+    if (variants.length === 0) {
+    ctx.session.city = text;
+    ctx.session.checkoutStep = 'comment';
+    await ctx.reply('💬 Оставьте комментарий к заказу (или напишите "нет", если комментариев нет):', buildPvzButtonKeyboard());
+    return;
+  }
+
+    ctx.session.cityOptions = variants;
+    ctx.session.checkoutStep = 'city_choice';
+
+    const buttons = variants.slice(0, 5).map((v, idx) => [Markup.button.callback(v.address, `city_pick_${idx}`)]);
+    buttons.push([Markup.button.callback('Оставить как ввели', 'city_keep')]);
+    await ctx.reply('Выберите город из списка или оставьте как ввели:', Markup.inlineKeyboard(buttons));
+  } catch (error) {
+    console.error('City detect error:', error);
+    ctx.session.city = text;
+    ctx.session.checkoutStep = 'comment';
+    await ctx.reply('💬 Оставьте комментарий к заказу (или напишите "нет", если комментариев нет):', buildPvzButtonKeyboard());
+  }
+}
+
+async function handlePvzCityInput(ctx, text) {
+  ctx.session.pendingPvzCity = text;
+  const token = process.env.YANDEX_DELIVERY_TOKEN;
+  if (!token) {
+    ctx.session.city = text;
+    ctx.session.pvzStep = null;
+    ctx.session.deliveryGeoId = null;
+    await ctx.reply(`Город для ПВЗ: ${text}`);
+    return;
+  }
+
+  try {
+    const variants = await detectCity(text, token);
+    if (variants.length === 0) {
+      ctx.session.city = text;
+      ctx.session.pvzStep = null;
+      ctx.session.deliveryGeoId = null;
+      await ctx.reply(`Город для ПВЗ: ${text}`);
+      return;
+    }
+    ctx.session.pvzOptions = variants;
+    ctx.session.pvzStep = 'pvz_choice';
+    const buttons = variants.slice(0, MAX_PVZ_OPTIONS).map((v, idx) => [Markup.button.callback(v.address, `pvz_pick_${idx}`)]);
+    buttons.push([Markup.button.callback('Потом разберемся', 'pvz_keep')]);
+    await ctx.reply('Выберите город для ПВЗ:', Markup.inlineKeyboard(buttons));
+  } catch (error) {
+    console.error('PVZ City detect error:', error);
+    ctx.session.city = text;
+    ctx.session.pvzStep = null;
+    ctx.session.deliveryGeoId = null;
+    await ctx.reply(`Город для ПВЗ: ${text}`);
+  }
+}
+
+async function handlePvzStreetInput(ctx, text) {
+  ctx.session.pendingPvzCity = ctx.session.pendingPvzCity || ctx.session.city || '';
+  ctx.session.pendingPvzStreet = text;
+  const token = process.env.YANDEX_DELIVERY_TOKEN;
+  if (!token || !ctx.session.pendingPvzGeoId) {
+    ctx.session.city = ctx.session.pendingPvzCity;
+    ctx.session.pvzStep = null;
+    ctx.session.deliveryGeoId = ctx.session.pendingPvzGeoId || null;
+    await ctx.reply(`Город для ПВЗ: ${ctx.session.city}`);
+    return;
+  }
+
+  try {
+    const pickups = await listPickupPoints(ctx.session.pendingPvzGeoId, token);
+    const filtered = pickups.filter((p) => {
+      const label = formatPickupLabel(p).toLowerCase();
+      return label.includes(text.toLowerCase());
+    });
+    const options = (filtered.length > 0 ? filtered : pickups).slice(0, MAX_PVZ_OPTIONS);
+    if (options.length === 0) {
+      ctx.session.city = ctx.session.pendingPvzCity;
+      ctx.session.pvzStep = null;
+      await ctx.reply(`ПВЗ не найдены. Город: ${ctx.session.city}`);
+      return;
+    }
+    ctx.session.pvzOptions = options;
+    ctx.session.pvzStep = 'street_choice';
+    const buttons = options.map((v, idx) => [Markup.button.callback(formatPickupLabel(v), `pvz_pick_${idx}`)]);
+    buttons.push([Markup.button.callback('Потом разберемся', 'pvz_skip_pickpoint')]);
+    await ctx.reply('Выберите ПВЗ:', Markup.inlineKeyboard(buttons));
+  } catch (error) {
+    console.error('PVZ City detect error:', error);
+    ctx.session.city = text;
+    ctx.session.pvzStep = null;
+    await ctx.reply(`Город для ПВЗ: ${text}`);
+  }
+}
+
+async function detectCity(query, token) {
+  const payload = JSON.stringify({ location: query });
+  const url = 'https://b2b-authproxy.taxi.yandex.net/api/b2b/platform/location/detect';
+  return new Promise((resolve, reject) => {
+    const req = https.request(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'Content-Length': Buffer.byteLength(payload)
+      }
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          if (res.statusCode >= 400) {
+            return reject(new Error(`Yandex API error: ${res.statusCode} ${data}`));
+          }
+          const parsed = JSON.parse(data);
+          resolve(parsed.variants || []);
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
+async function listPickupPoints(geoId, token) {
+  const payload = JSON.stringify({ geo_id: geoId, limit: 200 });
+  const url = 'https://b2b-authproxy.taxi.yandex.net/api/b2b/platform/pickup-points/list';
+  return new Promise((resolve, reject) => {
+    const req = https.request(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'Content-Length': Buffer.byteLength(payload)
+      }
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          if (res.statusCode >= 400) {
+            return reject(new Error(`Yandex API error: ${res.statusCode} ${data}`));
+          }
+          const parsed = JSON.parse(data);
+          resolve(parsed.pickup_points || parsed.points || []);
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
+function formatPickupLabel(p) {
+  if (!p) return '';
+  if (p.full_address) return p.full_address;
+  if (p.address?.formatted) return p.address.formatted;
+  if (p.address?.full_address) return p.address.full_address;
+  if (p.name) return p.name;
+  return `${p.lat || ''} ${p.lon || ''}`.trim();
+}
+
+function buildPvzButtonKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('Выбрать Яндекс ПВЗ', 'pvz_start')]
+  ]);
+}
+
+function buildCommentKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('Без комментария', 'comment_none')]
+  ]);
+}
 
 // Promo codes menu
 bot.action('promos', async (ctx) => {
@@ -504,13 +901,151 @@ function getMenuKeyboard() {
   ]).resize();
 }
 
+// Helper to build product captions
+function buildProductCaption(product, variant) {
+  let message = `🎽 ${product.name}`;
+  if (variant?.name) {
+    message += ` (${variant.name})`;
+  }
+  message += `\n\n${product.description || ''}\n\n`;
+  message += `💰 Цена: ${product.getFormattedPrice()}\n`;
+  if (product.shippingIncluded) {
+    message += '🚚 Доставка за наш счет\n';
+  }
+  if (product.isPreorder) {
+    message += '🕒 Это предзаказ. Сроки и детали уточним после оформления.\n';
+    if (product.preorderEndDate) {
+      message += `📅 Предзаказ до: ${product.preorderEndDate.toLocaleDateString('ru-RU')}\n`;
+    }
+    if (product.estimatedDeliveryDate) {
+      message += `🚚 Ориентир получения: ${product.estimatedDeliveryDate.toLocaleDateString('ru-RU')}\n`;
+    }
+  } else if (variant?.stock !== undefined) {
+    message += `📦 В наличии: ${variant.stock} шт.\n`;
+  } else {
+    message += `📦 В наличии: ${product.stock} шт.\n`;
+  }
+  return message;
+}
+
+// Send product view with photo when есть фото
+async function sendProductView(ctx, { message, keyboard, photoUrl }) {
+  const markup = Markup.inlineKeyboard(keyboard);
+  if (!photoUrl) {
+    // Fallback to text-only
+    if (ctx.update?.callback_query?.message?.message_id) {
+      await ctx.editMessageText(message, markup);
+    } else {
+      await ctx.reply(message, markup);
+    }
+    return;
+  }
+
+  try {
+    await ctx.editMessageMedia(
+      {
+        type: 'photo',
+        media: photoUrl,
+        caption: message
+      },
+      markup
+    );
+  } catch (error) {
+    console.warn('editMessageMedia failed, sending new photo message', error.message);
+    await ctx.replyWithPhoto(photoUrl, {
+      caption: message,
+      ...markup
+    });
+  }
+}
+
+// Helper to show user's orders
+async function showUserOrders(ctx, { fromCallback = false } = {}) {
+  try {
+    if (ctx.from) {
+      await UserModel.upsertUser(ctx.from);
+    }
+    const orders = await OrderModel.getOrdersWithItemsByTelegramId(ctx.from.id);
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('🛒 Корзина', 'cart')],
+      [Markup.button.callback('⬅️ В магазин', 'shop')],
+      [Markup.button.callback('🏠 В меню', 'main_menu')]
+    ]);
+
+    if (orders.length === 0) {
+      const emptyMsg = '📦 У вас пока нет заказов. Соберите корзину и оформите первый заказ!';
+      if (fromCallback && ctx.update?.callback_query?.message?.message_id) {
+        await ctx.editMessageText(emptyMsg, keyboard);
+        await ctx.answerCbQuery();
+      } else {
+        await ctx.reply(emptyMsg, keyboard);
+      }
+      return;
+    }
+
+    const messageParts = ['📦 Мои заказы:\n'];
+    for (const order of orders) {
+      const createdAt = order.createdAt
+        ? new Date(order.createdAt).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
+        : '';
+      const headerParts = [`#${order.id}`, order.getStatusText()];
+      if (createdAt) {
+        headerParts.push(createdAt);
+      }
+      messageParts.push(headerParts.join(' • '));
+
+      if (order.items?.length) {
+        for (const item of order.items) {
+          const variant = item.variantName ? ` (${item.variantName})` : '';
+          const preorder = item.isPreorder ? ' (предзаказ)' : '';
+          const lineTotal = (item.pricePerUnit || 0) * item.quantity;
+          messageParts.push(` • ${item.productName}${variant}${preorder} x${item.quantity}`);
+          messageParts.push(`   ${lineTotal.toFixed(2)} ${item.currency}`);
+        }
+      } else {
+        messageParts.push(' • Товары не найдены');
+      }
+
+      const total = Number.isFinite(order.totalAmount) ? order.totalAmount : 0;
+      messageParts.push(`Итого: ${total.toFixed(2)} RUB`);
+      messageParts.push('');
+    }
+
+    const message = messageParts.join('\n');
+
+    if (fromCallback && ctx.update?.callback_query?.message?.message_id) {
+      try {
+        await ctx.editMessageText(message, keyboard);
+      } catch (error) {
+        console.warn('editMessageText failed in showUserOrders, sending new message', error.description || error.message);
+        await ctx.reply(message, keyboard);
+      }
+      await ctx.answerCbQuery();
+    } else {
+      await ctx.reply(message, keyboard);
+    }
+  } catch (error) {
+    console.error('Error showing orders:', error);
+    try {
+      if (fromCallback) {
+        await ctx.answerCbQuery('❌ Не удалось загрузить заказы');
+      }
+    } catch (callbackError) {
+      console.error('Failed to send callback query:', callbackError);
+    }
+    if (!fromCallback) {
+      await ctx.reply('❌ Не удалось загрузить заказы, попробуйте позже.');
+    }
+  }
+}
+
 // Helper function to show cart
 async function showCart(ctx) {
   const userId = ctx.from.id;
   
   try {
     const cartItems = await CartModel.getCartItems(userId);
-    const total = await CartModel.getCartTotal(userId);
+    const total = parseFloat(await CartModel.getCartTotal(userId)) || 0;
     
     if (cartItems.length === 0) {
       const message = '🛒 Ваша корзина пуста';
@@ -531,8 +1066,14 @@ async function showCart(ctx) {
     
     for (const item of cartItems) {
       const variantText = item.variant_name ? ` (${item.variant_name})` : '';
-      message += `🔹 ${item.product_name}${variantText} x${item.quantity}\n`;
-      message += `   💰 ${parseFloat(item.product_price) * item.quantity} ${item.product_currency}\n\n`;
+      const preorderText = item.is_preorder ? ' (предзаказ)' : '';
+      message += `🔹 ${item.product_name}${variantText}${preorderText} x${item.quantity}\n`;
+      message += `   💰 ${parseFloat(item.product_price) * item.quantity} ${item.product_currency}\n`;
+      if (item.is_preorder) {
+        message += '   🕒 Товар по предзаказу\n\n';
+      } else {
+        message += '\n';
+      }
     }
     
     message += `Итого: ${total.toFixed(2)} RUB\n`;
@@ -550,7 +1091,12 @@ async function showCart(ctx) {
     ];
     
     if (ctx.update.callback_query) {
-      await ctx.editMessageText(message, Markup.inlineKeyboard(keyboard));
+      try {
+        await ctx.editMessageText(message, Markup.inlineKeyboard(keyboard));
+      } catch (error) {
+        console.warn('editMessageText failed in showCart, sending new message', error.description || error.message);
+        await ctx.reply(message, Markup.inlineKeyboard(keyboard));
+      }
     } else {
       await ctx.reply(message, Markup.inlineKeyboard(keyboard));
     }
@@ -572,13 +1118,21 @@ async function createOrder(ctx, userId) {
     }
     
     // Create order
+    const pvzNote = ctx.session.pvzSelection ? `ПВЗ: ${ctx.session.pvzSelection}` : null;
+    const baseComment = ctx.session.comment || '';
+    const combinedComment = pvzNote ? (baseComment ? `${pvzNote}\n${baseComment}` : pvzNote) : baseComment;
+
     const orderData = {
       userId: userId,
       customerName: ctx.session.customerName,
-      phone: ctx.session.phone,
+      phone: null,
       cityCountry: ctx.session.city,
-      comment: ctx.session.comment,
-      totalAmount: total
+      comment: combinedComment,
+      totalAmount: total,
+      paymentProofUrl: ctx.session.paymentProofUrl || null,
+      deliveryGeoId: ctx.session.deliveryGeoId || null,
+      deliveryPickupId: ctx.session.deliveryPickupId || null,
+      deliveryPickupAddress: ctx.session.deliveryPickupAddress || null
     };
     
     const order = await OrderModel.createOrder(orderData);
@@ -591,9 +1145,8 @@ async function createOrder(ctx, userId) {
     const message = `
 🎉 Спасибо за заказ!
 
-Мы свяжемся с тобой в Telegram, чтобы обсудить оплату и доставку.
-
 Номер заказа: #${order.id}
+Мы получили скриншот оплаты. Свяжемся с вами в Telegram, чтобы подтвердить детали.
     `;
     
     await ctx.reply(message, getMenuKeyboard());

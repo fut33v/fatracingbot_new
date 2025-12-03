@@ -4,6 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
 const cookieParser = require('cookie-parser');
+const https = require('https');
 const db = require('../models/database');
 const BroadcastService = require('../services/broadcastService');
 const { requireAdmin } = require('./middleware/auth');
@@ -202,12 +203,25 @@ app.get('/api/dashboard/stats', requireAdmin, async (req, res) => {
     // Get total revenue (simplified)
     const revenueResult = await db.query('SELECT COALESCE(SUM(total_amount), 0) as total FROM orders WHERE status != $1', ['cancelled']);
     const totalRevenue = parseFloat(revenueResult.rows[0].total);
+    const confirmedRevenueResult = await db.query('SELECT COALESCE(SUM(total_amount), 0) as total FROM orders WHERE payment_confirmed = TRUE');
+    const confirmedRevenue = parseFloat(confirmedRevenueResult.rows[0].total);
+    const costResult = await db.query(
+      `SELECT COALESCE(SUM((p.cost + CASE WHEN p.shipping_included THEN p.shipping_cost ELSE 0 END) * oi.quantity), 0) as total_cost
+       FROM order_items oi
+       JOIN products p ON oi.product_id = p.id
+       JOIN orders o ON oi.order_id = o.id
+       WHERE o.payment_confirmed = TRUE`
+    );
+    const confirmedCost = parseFloat(costResult.rows[0].total_cost);
+    const netProfit = (confirmedRevenue || 0) - (confirmedCost || 0);
     
     res.json({
       totalUsers,
       consentUsers,
       newOrders,
-      totalRevenue
+      totalRevenue: confirmedRevenue || totalRevenue,
+      totalCost: confirmedCost || 0,
+      netProfit
     });
   } catch (error) {
     console.error('Error fetching dashboard stats:', error);
@@ -232,14 +246,46 @@ app.get('/api/products', requireAdmin, async (req, res) => {
   }
 });
 
+// Get product by ID
+app.get('/api/products/:id', requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.query('SELECT * FROM products WHERE id = $1', [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error fetching product:', error);
+    res.status(500).json({
+      error: 'Failed to fetch product'
+    });
+  }
+});
+
 // Create a new product
 app.post('/api/products', requireAdmin, async (req, res) => {
   try {
-    const { name, description, price, currency, stock, photo_url, status } = req.body;
+    const { name, description, price, cost, shipping_included, shipping_cost, currency, stock, photo_url, status, is_preorder, preorder_end_date, estimated_delivery_date } = req.body;
     
     const result = await db.query(
-      'INSERT INTO products (name, description, price, currency, stock, photo_url, status) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
-      [name, description, price, currency || 'RUB', stock || 0, photo_url || null, status || 'active']
+      `INSERT INTO products (name, description, price, cost, shipping_included, shipping_cost, currency, stock, photo_url, status, is_preorder, preorder_end_date, estimated_delivery_date)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+      [
+        name,
+        description,
+        price,
+        cost || 0,
+        shipping_included === true,
+        shipping_cost || 0,
+        currency || 'RUB',
+        stock || 0,
+        photo_url || null,
+        status || 'active',
+        is_preorder === true,
+        preorder_end_date || null,
+        estimated_delivery_date || null
+      ]
     );
     
     res.json(result.rows[0]);
@@ -255,11 +301,14 @@ app.post('/api/products', requireAdmin, async (req, res) => {
 app.put('/api/products/:id', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, price, currency, stock, photo_url, status } = req.body;
+    const { name, description, price, cost, shipping_included, shipping_cost, currency, stock, photo_url, status, is_preorder, preorder_end_date, estimated_delivery_date } = req.body;
     
     const result = await db.query(
-      'UPDATE products SET name = $1, description = $2, price = $3, currency = $4, stock = $5, photo_url = $6, status = $7, updated_at = CURRENT_TIMESTAMP WHERE id = $8 RETURNING *',
-      [name, description, price, currency, stock, photo_url, status, id]
+      `UPDATE products
+       SET name = $1, description = $2, price = $3, cost = $4, shipping_included = $5, shipping_cost = $6, currency = $7, stock = $8, photo_url = $9, status = $10, is_preorder = $11,
+           preorder_end_date = $12, estimated_delivery_date = $13, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $14 RETURNING *`,
+      [name, description, price, cost || 0, shipping_included === true, shipping_cost || 0, currency, stock, photo_url, status, is_preorder === true, preorder_end_date || null, estimated_delivery_date || null, id]
     );
     
     
@@ -388,15 +437,18 @@ app.get('/api/orders', requireAdmin, async (req, res) => {
     console.log('Orders requested by user:', req.session.user.first_name);
     
     const { status } = req.query;
-    let query = 'SELECT o.*, u.first_name, u.last_name, u.username FROM orders o JOIN users u ON o.user_id = u.id';
+    let query = `
+      SELECT o.*, u.first_name, u.last_name, u.username
+      FROM orders o
+      JOIN users u ON o.user_id = u.id`;
     const params = [];
     
     if (status) {
-      query += ' WHERE o.status = $1 ORDER BY o.created_at DESC';
+      query += ' WHERE o.status = $1';
       params.push(status);
-    } else {
-      query += ' ORDER BY o.created_at DESC';
     }
+    
+    query += ' ORDER BY o.created_at DESC';
     
     const result = await db.query(query, params);
     res.json(result.rows);
@@ -431,6 +483,137 @@ app.put('/api/orders/:id/status', requireAdmin, async (req, res) => {
     res.status(500).json({
       error: 'Failed to update order status'
     });
+  }
+});
+
+// Delete order
+app.delete('/api/orders/:id', requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.query('DELETE FROM orders WHERE id = $1 RETURNING *', [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    res.json({ message: 'Order deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting order:', error);
+    res.status(500).json({ error: 'Failed to delete order' });
+  }
+});
+
+// Get order by ID with user info
+app.get('/api/orders/:id', requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.query(
+      `SELECT o.*, u.first_name, u.last_name, u.username, u.telegram_id
+       FROM orders o
+       JOIN users u ON o.user_id = u.id
+       WHERE o.id = $1`,
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error fetching order:', error);
+    res.status(500).json({ error: 'Failed to fetch order' });
+  }
+});
+
+// Create Yandex Delivery request for order
+app.post('/api/orders/:id/delivery-request', requireAdmin, async (req, res) => {
+  const token = process.env.YANDEX_DELIVERY_TOKEN;
+  const sourcePlatformId = process.env.YANDEX_SOURCE_PLATFORM_ID;
+
+  if (!token) {
+    return res.status(400).json({ error: 'YANDEX_DELIVERY_TOKEN is not configured' });
+  }
+  if (!sourcePlatformId) {
+    return res.status(400).json({ error: 'YANDEX_SOURCE_PLATFORM_ID is not configured' });
+  }
+
+  try {
+    const { id } = req.params;
+    const orderResult = await db.query(
+      `SELECT o.*, u.first_name, u.last_name, u.username, u.telegram_id
+       FROM orders o
+       JOIN users u ON o.user_id = u.id
+       WHERE o.id = $1`,
+      [id]
+    );
+    if (orderResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    const order = orderResult.rows[0];
+
+    if (!order.delivery_pickup_id) {
+      return res.status(400).json({ error: 'У заказа нет выбранного ПВЗ (delivery_pickup_id)' });
+    }
+
+    const payload = buildDeliveryPayload(order, sourcePlatformId);
+    const offerResponse = await callYandexDelivery(
+      '/api/b2b/platform/offers/create?send_unix=false',
+      payload,
+      token
+    );
+
+    const offer = pickCheapestOffer(offerResponse?.offers || []);
+    if (offer?.offer_id) {
+      payload.offer_id = offer.offer_id;
+    }
+
+    const requestResponse = await callYandexDelivery(
+      '/api/b2b/platform/request/create?send_unix=false',
+      payload,
+      token,
+      { 'Accept-Language': 'ru' }
+    );
+
+    const requestId = requestResponse?.id || requestResponse?.request_id || null;
+    const offerId = offer?.offer_id || null;
+
+    await db.query(
+      `UPDATE orders SET delivery_offer_id = $1, delivery_request_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
+      [offerId, requestId, id]
+    );
+
+    res.json({
+      delivery_offer_id: offerId,
+      delivery_request_id: requestId,
+      offer,
+      offer_response: offerResponse,
+      request_response: requestResponse
+    });
+  } catch (error) {
+    console.error('Error creating delivery request:', error);
+    res.status(500).json({ error: error.message || 'Failed to create delivery request' });
+  }
+});
+
+// Confirm payment
+app.put('/api/orders/:id/payment', requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { confirmed } = req.body;
+    const isConfirmed = confirmed === false ? false : true;
+    const result = await db.query(
+      `UPDATE orders
+       SET payment_confirmed = $1,
+           payment_confirmed_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE NULL END,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2
+       RETURNING *`,
+      [isConfirmed, id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error confirming payment:', error);
+    res.status(500).json({ error: 'Failed to update payment status' });
   }
 });
 
@@ -647,6 +830,154 @@ function normalizeButtons(buttons) {
     console.warn('Failed to parse broadcast buttons JSON:', error);
     return null;
   }
+}
+
+function buildInterval(dayOffset, fromHour, toHour) {
+  const from = new Date();
+  from.setUTCDate(from.getUTCDate() + dayOffset);
+  from.setUTCHours(fromHour, 0, 0, 0);
+
+  const to = new Date(from);
+  to.setUTCHours(toHour, 0, 0, 0);
+
+  return {
+    from: from.toISOString(),
+    to: to.toISOString()
+  };
+}
+
+function buildDeliveryPayload(order, sourcePlatformId) {
+  const sourceInterval = buildInterval(0, 9, 18);
+  const destinationInterval = buildInterval(1, 9, 21);
+  const recipientFirstName = order.customer_name || order.first_name || 'Получатель';
+  const recipientLastName = order.last_name || order.username || '';
+  const sourceOperatorId = process.env.YANDEX_SOURCE_OPERATOR_ID || sourcePlatformId;
+
+  return {
+    info: {
+      operator_request_id: `ORDER-${order.id}`,
+      comment: order.comment || 'Заявка из админки FATRACING'
+    },
+    source: {
+      platform_station: {
+        platform_id: sourcePlatformId,
+        operator_station_id: sourceOperatorId
+      },
+      interval_utc: sourceInterval
+    },
+    destination: {
+      type: 'platform_station',
+      platform_station: {
+        platform_id: order.delivery_pickup_id,
+        operator_station_id: order.delivery_pickup_id
+      },
+      interval_utc: destinationInterval
+    },
+    items: [
+      {
+        count: 1,
+        name: `Заказ #${order.id}`,
+        article: `ORDER-${order.id}`,
+        place_barcode: `BOX-${order.id}`,
+        billing_details: {
+          inn: process.env.BILLING_INN || '7707083893',
+          nds: 20,
+          unit_price: 1,
+          assessed_unit_price: 1
+        },
+        physical_dims: {
+          dx: 30,
+          dy: 20,
+          dz: 5,
+          predefined_volume: 0
+        },
+        cargo_types: ['80'],
+        fitting: false
+      }
+    ],
+    places: [
+      {
+        barcode: `BOX-${order.id}`,
+        description: order.delivery_pickup_address || 'Маленькая посылка',
+        physical_dims: {
+          weight_gross: 500,
+          dx: 30,
+          dy: 20,
+          dz: 5,
+          predefined_volume: 0
+        }
+      }
+    ],
+    billing_info: {
+      payment_method: 'already_paid',
+      delivery_cost: 0,
+      variable_delivery_cost_for_recipient: []
+    },
+    recipient_info: {
+      first_name: recipientFirstName,
+      last_name: recipientLastName,
+      phone: order.phone || '+79990000000',
+      email: order.username ? `${order.username}@telegram.local` : 'user@example.com'
+    },
+    last_mile_policy: 'self_pickup',
+    particular_items_refuse: false,
+    forbid_unboxing: false
+  };
+}
+
+function getOfferPrice(offer) {
+  if (!offer) return Number.POSITIVE_INFINITY;
+  if (offer.total_price !== undefined) return Number(offer.total_price);
+  if (offer.total !== undefined) return Number(offer.total);
+  if (offer.price !== undefined) return Number(offer.price);
+  return Number.POSITIVE_INFINITY;
+}
+
+function pickCheapestOffer(offers) {
+  if (!Array.isArray(offers) || offers.length === 0) return null;
+  return offers.reduce((best, current) => {
+    const bestPrice = getOfferPrice(best);
+    const currentPrice = getOfferPrice(current);
+    return currentPrice < bestPrice ? current : best;
+  });
+}
+
+function callYandexDelivery(path, payload, token, extraHeaders = {}) {
+  const data = JSON.stringify(payload);
+  const url = new URL(`https://b2b-authproxy.taxi.yandex.net${path}`);
+
+  const options = {
+    method: 'POST',
+    hostname: url.hostname,
+    path: `${url.pathname}${url.search}`,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      'Content-Length': Buffer.byteLength(data),
+      ...extraHeaders
+    }
+  };
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(options, (resp) => {
+      let body = '';
+      resp.on('data', (chunk) => { body += chunk; });
+      resp.on('end', () => {
+        if (resp.statusCode >= 400) {
+          return reject(new Error(`Yandex API error ${resp.statusCode}: ${body}`));
+        }
+        try {
+          resolve(JSON.parse(body || '{}'));
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+
+    req.on('error', (err) => reject(err));
+    req.write(data);
+    req.end();
+  });
 }
 
 function getPublicBaseUrl() {

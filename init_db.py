@@ -104,9 +104,15 @@ def init_database():
                 name VARCHAR(255) NOT NULL,
                 description TEXT,
                 price DECIMAL(10, 2) NOT NULL,
+                cost DECIMAL(10, 2) DEFAULT 0,
+                shipping_included BOOLEAN DEFAULT FALSE,
+                shipping_cost DECIMAL(10, 2) DEFAULT 0,
                 currency VARCHAR(3) DEFAULT 'RUB',
                 photo_url VARCHAR(512),
                 stock INTEGER DEFAULT 0,
+                is_preorder BOOLEAN DEFAULT FALSE,
+                preorder_end_date DATE,
+                estimated_delivery_date DATE,
                 status VARCHAR(20) DEFAULT 'active',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -135,6 +141,12 @@ def init_database():
                 city_country VARCHAR(255),
                 comment TEXT,
                 total_amount DECIMAL(10, 2),
+                payment_proof_url TEXT,
+                payment_confirmed BOOLEAN DEFAULT FALSE,
+                payment_confirmed_at TIMESTAMP,
+                delivery_geo_id INTEGER,
+                delivery_pickup_id TEXT,
+                delivery_pickup_address TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -190,6 +202,54 @@ def init_database():
         cursor.execute("""
             ALTER TABLE broadcasts
             ADD COLUMN IF NOT EXISTS use_markdown BOOLEAN DEFAULT FALSE
+        """)
+        cursor.execute("""
+            ALTER TABLE products
+            ADD COLUMN IF NOT EXISTS is_preorder BOOLEAN DEFAULT FALSE
+        """)
+        cursor.execute("""
+            ALTER TABLE products
+            ADD COLUMN IF NOT EXISTS preorder_end_date DATE
+        """)
+        cursor.execute("""
+            ALTER TABLE products
+            ADD COLUMN IF NOT EXISTS estimated_delivery_date DATE
+        """)
+        cursor.execute("""
+            ALTER TABLE products
+            ADD COLUMN IF NOT EXISTS cost DECIMAL(10, 2) DEFAULT 0
+        """)
+        cursor.execute("""
+            ALTER TABLE products
+            ADD COLUMN IF NOT EXISTS shipping_included BOOLEAN DEFAULT FALSE
+        """)
+        cursor.execute("""
+            ALTER TABLE products
+            ADD COLUMN IF NOT EXISTS shipping_cost DECIMAL(10, 2) DEFAULT 0
+        """)
+        cursor.execute("""
+            ALTER TABLE orders
+            ADD COLUMN IF NOT EXISTS payment_proof_url TEXT
+        """)
+        cursor.execute("""
+            ALTER TABLE orders
+            ADD COLUMN IF NOT EXISTS payment_confirmed BOOLEAN DEFAULT FALSE
+        """)
+        cursor.execute("""
+            ALTER TABLE orders
+            ADD COLUMN IF NOT EXISTS payment_confirmed_at TIMESTAMP
+        """)
+        cursor.execute("""
+            ALTER TABLE orders
+            ADD COLUMN IF NOT EXISTS delivery_geo_id INTEGER
+        """)
+        cursor.execute("""
+            ALTER TABLE orders
+            ADD COLUMN IF NOT EXISTS delivery_pickup_id TEXT
+        """)
+        cursor.execute("""
+            ALTER TABLE orders
+            ADD COLUMN IF NOT EXISTS delivery_pickup_address TEXT
         """)
         
         # Channel membership tracking
