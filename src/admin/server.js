@@ -28,7 +28,6 @@ const broadcastService = process.env.BOT_TOKEN ? new BroadcastService(process.en
 // Middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
-app.use(express.static(path.join(__dirname, 'public')));
 
 // Add request logging
 app.use((req, res, next) => {
@@ -140,6 +139,9 @@ app.post('/api/auth/logout', async (req, res) => {
   res.clearCookie('session_id');
   res.json({ message: 'Выход выполнен успешно' });
 });
+
+// Serve static assets after login page rendering to allow BOT_USERNAME injection
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Serve the main admin panel page
 app.get('/', (req, res) => {
