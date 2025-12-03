@@ -23,6 +23,7 @@ Telegram bot for the FATRACING cycling community.
    - `BOT_TOKEN` - Your Telegram bot token from [@BotFather](https://t.me/BotFather)
    - `FATRACING_CHANNEL_ID` - Your Telegram channel ID
    - `ADMIN_USER_IDS` - Comma-separated list of admin Telegram user IDs
+   - `FEATURE_ENABLE_YANDEX_PVZ` - Set to `true` to enable выбор ПВЗ через API Яндекса; leave unset/false to запросить адрес текстом
    - Database configuration parameters
 
 3. **Set up the database:**
