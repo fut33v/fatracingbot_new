@@ -140,9 +140,6 @@ app.post('/api/auth/logout', async (req, res) => {
   res.json({ message: 'Выход выполнен успешно' });
 });
 
-// Serve static assets after login page rendering to allow BOT_USERNAME injection
-app.use(express.static(path.join(__dirname, 'public')));
-
 // Serve the main admin panel page
 app.get('/', (req, res) => {
   try {
@@ -166,6 +163,9 @@ app.get('/login.html', (req, res) => {
     res.status(500).json({ error: 'Failed to serve login page' });
   }
 });
+
+// Serve static assets after dynamic login rendering
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Health check endpoint
 app.get('/api/health', async (req, res) => {
