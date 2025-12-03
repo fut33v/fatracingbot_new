@@ -9,6 +9,7 @@ const ChannelMembershipModel = require('../models/channelMembershipModel');
 const https = require('https');
 
 const MAX_PVZ_OPTIONS = 5;
+const YANDEX_PVZ_ENABLED = process.env.FEATURE_ENABLE_YANDEX_PVZ === 'true';
 
 // Initialize the bot
 const bot = new Telegraf(process.env.BOT_TOKEN);
@@ -311,8 +312,11 @@ bot.action('clear_cart', async (ctx) => {
   
   try {
     await CartModel.clearCart(userId);
+    // Drop checkout context to avoid dangling flow after cart is emptied
+    ctx.session = {};
     await ctx.answerCbQuery('✅ Корзина очищена');
     await showCart(ctx);
+    await ctx.reply('Оформление заказа прервано: корзина пуста.', getMenuKeyboard());
   } catch (error) {
     console.error('Error clearing cart:', error);
     try {
@@ -341,8 +345,47 @@ bot.action('checkout', async (ctx) => {
     const lastOrder = await OrderModel.getLatestOrderForUser(userId);
     const savedName = lastOrder?.customerName;
     const savedCity = lastOrder?.cityCountry;
+    const savedPhone = lastOrder?.phone;
+    const savedPickupAddress = lastOrder?.deliveryPickupAddress;
 
-    if (savedName && savedCity) {
+    if (!YANDEX_PVZ_ENABLED) {
+      const pickupAddress = savedPickupAddress || savedCity;
+      if (savedName && savedPhone && pickupAddress) {
+        ctx.session.customerName = savedName;
+        ctx.session.phone = savedPhone;
+        ctx.session.deliveryPickupAddress = pickupAddress;
+        ctx.session.city = pickupAddress;
+        ctx.session.pvzSelection = pickupAddress;
+        ctx.session.checkoutStep = 'comment';
+        await ctx.reply(
+          `Используем ранее указанные данные:\n` +
+          `👤 Имя: ${savedName}\n` +
+          `📞 Телефон: ${savedPhone}\n` +
+          `🏤 ПВЗ Яндекса: ${pickupAddress}\n\n` +
+          '💬 Оставьте комментарий к заказу или нажмите "Без комментария":',
+          buildCommentKeyboard()
+        );
+      } else if (savedName && savedPhone) {
+        ctx.session.customerName = savedName;
+        ctx.session.phone = savedPhone;
+        ctx.session.checkoutStep = 'pvz_address';
+        await ctx.reply(
+          `Используем ранее указанные данные:\n` +
+          `👤 Имя: ${savedName}\n` +
+          `📞 Телефон: ${savedPhone}\n\n` +
+          '🏤 Напишите адрес ПВЗ Яндекса (город, улица, номер отделения):'
+        );
+      } else if (savedName) {
+        ctx.session.customerName = savedName;
+        ctx.session.checkoutStep = 'phone';
+        await ctx.reply(
+          `👤 Имя: ${savedName}\n` +
+          '📞 Укажите номер телефона для связи:'
+        );
+      } else {
+        await ctx.reply('📝 Для оформления заказа укажите, как к вам обращаться:');
+      }
+    } else if (savedName && savedCity) {
       ctx.session.customerName = savedName;
       ctx.session.city = savedCity;
       ctx.session.checkoutStep = 'comment';
@@ -350,8 +393,8 @@ bot.action('checkout', async (ctx) => {
         `Используем ранее указанные данные:\n` +
         `👤 Имя: ${savedName}\n` +
         `🌍 Город: ${savedCity}\n\n` +
-        '💬 Оставьте комментарий к заказу (или напишите "нет", если комментариев нет):',
-        buildPvzButtonKeyboard()
+        '💬 Оставьте комментарий к заказу или нажмите "Без комментария":',
+        buildCommentPromptKeyboard()
       );
     } else {
       await ctx.reply('📝 Для оформления заказа укажите, как к вам обращаться:');
@@ -370,11 +413,15 @@ bot.action('checkout', async (ctx) => {
 
 // Handle text messages during checkout
 bot.on('text', async (ctx) => {
-  if (ctx.session?.pvzStep === 'city') {
+  // If checkout is active but cart got emptied, abort flow early
+  if (await abortIfCartEmptyDuringCheckout(ctx)) {
+    return;
+  }
+  if (YANDEX_PVZ_ENABLED && ctx.session?.pvzStep === 'city') {
     await handlePvzCityInput(ctx, ctx.message.text);
     return;
   }
-  if (ctx.session?.pvzStep === 'street') {
+  if (YANDEX_PVZ_ENABLED && ctx.session?.pvzStep === 'street') {
     await handlePvzStreetInput(ctx, ctx.message.text);
     return;
   }
@@ -390,11 +437,36 @@ bot.on('text', async (ctx) => {
     switch (ctx.session.checkoutStep) {
       case 'name':
         ctx.session.customerName = text;
-        ctx.session.checkoutStep = 'city';
-        await ctx.reply('🌍 Укажите ваш город/страну:');
+        if (YANDEX_PVZ_ENABLED) {
+          ctx.session.checkoutStep = 'city';
+          await ctx.reply('🌍 Укажите ваш город/страну:');
+        } else {
+          ctx.session.checkoutStep = 'phone';
+          await ctx.reply('📞 Укажите номер телефона для связи:');
+        }
+        break;
+
+      case 'phone':
+        ctx.session.phone = text;
+        ctx.session.checkoutStep = 'pvz_address';
+        await ctx.reply('🏤 Напишите адрес ПВЗ Яндекса (город, улица, номер отделения):');
+        break;
+
+      case 'pvz_address':
+        ctx.session.deliveryPickupAddress = text;
+        ctx.session.pvzSelection = text;
+        ctx.session.city = text;
+        ctx.session.checkoutStep = 'comment';
+        await ctx.reply('💬 Оставьте комментарий к заказу или нажмите "Без комментария":', buildCommentKeyboard());
         break;
 
       case 'city':
+        if (!YANDEX_PVZ_ENABLED) {
+          ctx.session.city = text;
+          ctx.session.checkoutStep = 'comment';
+          await ctx.reply('💬 Оставьте комментарий к заказу или нажмите "Без комментария":', buildCommentKeyboard());
+          break;
+        }
         await handleCityInput(ctx, text);
         break;
 
@@ -403,7 +475,8 @@ bot.on('text', async (ctx) => {
         ctx.session.checkoutStep = 'payment_proof';
         await ctx.reply(
           '💳 Оплатите переводом по СБП (Т-Банк/Сбер) на номер 89633345452.\n' +
-          '📸 После оплаты отправьте сюда скриншот перевода, чтобы завершить заказ.'
+          '📸 После оплаты отправьте сюда скриншот перевода, чтобы завершить заказ.',
+          buildPaymentProofKeyboard()
         );
         break;
 
@@ -446,6 +519,13 @@ bot.action('city_keep', async (ctx) => {
 });
 
 bot.action('pvz_start', async (ctx) => {
+  if (!YANDEX_PVZ_ENABLED) {
+    ctx.session = ctx.session || {};
+    ctx.session.checkoutStep = 'pvz_address';
+    await ctx.answerCbQuery('Теперь просто отправьте адрес ПВЗ текстом');
+    await ctx.reply('🏤 Напишите адрес ПВЗ Яндекса (город, улица, номер отделения):');
+    return;
+  }
   ctx.session = ctx.session || {};
   ctx.session.pvzStep = 'city';
   ctx.session.pvzOptions = null;
@@ -455,6 +535,10 @@ bot.action('pvz_start', async (ctx) => {
 });
 
 bot.action(/pvz_pick_(\d+)/, async (ctx) => {
+  if (!YANDEX_PVZ_ENABLED) {
+    await ctx.answerCbQuery('Выбор ПВЗ через карту отключён. Напишите адрес текстом.');
+    return;
+  }
   if (!ctx.session || (ctx.session.pvzStep !== 'pvz_choice' && ctx.session.pvzStep !== 'street_choice')) {
     return ctx.answerCbQuery();
   }
@@ -480,7 +564,7 @@ bot.action(/pvz_pick_(\d+)/, async (ctx) => {
   ctx.session.checkoutStep = 'comment';
   await ctx.answerCbQuery(label || 'ПВЗ выбран');
   await ctx.reply(`ПВЗ выбран: ${ctx.session.pvzSelection}`);
-  await ctx.reply('💬 Оставьте комментарий к заказу (или напишите "нет", если комментариев нет):', buildCommentKeyboard());
+  await ctx.reply('💬 Оставьте комментарий к заказу или нажмите "Без комментария":', buildCommentKeyboard());
 });
 
 bot.action('pvz_keep', async (ctx) => {
@@ -502,7 +586,7 @@ bot.action('pvz_skip_pickpoint', async (ctx) => {
   ctx.session.deliveryPickupId = null;
   ctx.session.deliveryPickupAddress = null;
   await ctx.answerCbQuery('Идём дальше');
-  await ctx.reply('💬 Оставьте комментарий к заказу (или напишите "нет", если комментариев нет):', buildCommentKeyboard());
+  await ctx.reply('💬 Оставьте комментарий к заказу или нажмите "Без комментария":', buildCommentKeyboard());
 });
 
 bot.action('comment_none', async (ctx) => {
@@ -511,13 +595,24 @@ bot.action('comment_none', async (ctx) => {
   await ctx.answerCbQuery('Комментарий не нужен');
   await ctx.reply(
     '💳 Оплатите переводом по СБП (Т-Банк/Сбер) на номер 89633345452.\n' +
-    '📸 После оплаты отправьте сюда скриншот перевода, чтобы завершить заказ.'
+    '📸 После оплаты отправьте сюда скриншот перевода, чтобы завершить заказ.',
+    buildPaymentProofKeyboard()
   );
+});
+
+bot.action('cancel_checkout', async (ctx) => {
+  ctx.session = {};
+  await ctx.answerCbQuery('Оформление отменено');
+  await ctx.reply('❌ Оформление заказа отменено. Корзина сохранилась, можно начать заново.', getMenuKeyboard());
 });
 
 // Handle payment proof photo
 bot.on('photo', async (ctx) => {
   if (!ctx.session || ctx.session.checkoutStep !== 'payment_proof') {
+    return;
+  }
+  // Abort if cart is empty before processing payment proof
+  if (await abortIfCartEmptyDuringCheckout(ctx)) {
     return;
   }
   const userId = ctx.from.id;
@@ -541,23 +636,29 @@ bot.on('photo', async (ctx) => {
 });
 
 async function handleCityInput(ctx, text) {
+  if (!YANDEX_PVZ_ENABLED) {
+    ctx.session.city = text;
+    ctx.session.checkoutStep = 'comment';
+    await ctx.reply('💬 Оставьте комментарий к заказу или нажмите "Без комментария":', buildCommentKeyboard());
+    return;
+  }
   ctx.session.pendingCity = text;
   const token = process.env.YANDEX_DELIVERY_TOKEN;
   if (!token) {
     ctx.session.city = text;
     ctx.session.checkoutStep = 'comment';
-    await ctx.reply('💬 Оставьте комментарий к заказу (или напишите "нет", если комментариев нет):', buildPvzButtonKeyboard());
+    await ctx.reply('💬 Оставьте комментарий к заказу или нажмите "Без комментария":', buildCommentPromptKeyboard());
     return;
   }
 
   try {
     const variants = await detectCity(text, token);
     if (variants.length === 0) {
-    ctx.session.city = text;
-    ctx.session.checkoutStep = 'comment';
-    await ctx.reply('💬 Оставьте комментарий к заказу (или напишите "нет", если комментариев нет):', buildPvzButtonKeyboard());
-    return;
-  }
+      ctx.session.city = text;
+      ctx.session.checkoutStep = 'comment';
+      await ctx.reply('💬 Оставьте комментарий к заказу или нажмите "Без комментария":', buildCommentPromptKeyboard());
+      return;
+    }
 
     ctx.session.cityOptions = variants;
     ctx.session.checkoutStep = 'city_choice';
@@ -569,11 +670,20 @@ async function handleCityInput(ctx, text) {
     console.error('City detect error:', error);
     ctx.session.city = text;
     ctx.session.checkoutStep = 'comment';
-    await ctx.reply('💬 Оставьте комментарий к заказу (или напишите "нет", если комментариев нет):', buildPvzButtonKeyboard());
+    await ctx.reply('💬 Оставьте комментарий к заказу или нажмите "Без комментария":', buildCommentPromptKeyboard());
   }
 }
 
 async function handlePvzCityInput(ctx, text) {
+  if (!YANDEX_PVZ_ENABLED) {
+    ctx.session.deliveryPickupAddress = text;
+    ctx.session.pvzSelection = text;
+    ctx.session.city = text;
+    ctx.session.pvzStep = null;
+    ctx.session.checkoutStep = 'comment';
+    await ctx.reply('Адрес ПВЗ записали. 💬 Оставьте комментарий к заказу или нажмите "Без комментария":', buildCommentKeyboard());
+    return;
+  }
   ctx.session.pendingPvzCity = text;
   const token = process.env.YANDEX_DELIVERY_TOKEN;
   if (!token) {
@@ -608,6 +718,14 @@ async function handlePvzCityInput(ctx, text) {
 }
 
 async function handlePvzStreetInput(ctx, text) {
+  if (!YANDEX_PVZ_ENABLED) {
+    ctx.session.deliveryPickupAddress = ctx.session.pendingPvzCity || text;
+    ctx.session.pvzSelection = ctx.session.deliveryPickupAddress;
+    ctx.session.pvzStep = null;
+    ctx.session.checkoutStep = 'comment';
+    await ctx.reply('Адрес ПВЗ записали. 💬 Оставьте комментарий к заказу или нажмите "Без комментария":', buildCommentKeyboard());
+    return;
+  }
   ctx.session.pendingPvzCity = ctx.session.pendingPvzCity || ctx.session.city || '';
   ctx.session.pendingPvzStreet = text;
   const token = process.env.YANDEX_DELIVERY_TOKEN;
@@ -724,10 +842,32 @@ function buildPvzButtonKeyboard() {
   ]);
 }
 
+function buildCommentPromptKeyboard() {
+  return YANDEX_PVZ_ENABLED ? buildPvzButtonKeyboard() : buildCommentKeyboard();
+}
+
 function buildCommentKeyboard() {
   return Markup.inlineKeyboard([
     [Markup.button.callback('Без комментария', 'comment_none')]
   ]);
+}
+
+function buildPaymentProofKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('❌ Отменить оформление', 'cancel_checkout')]
+  ]);
+}
+
+// Abort checkout flow if cart emptied mid-process
+async function abortIfCartEmptyDuringCheckout(ctx) {
+  if (!ctx.session || !ctx.session.checkoutStep) return false;
+  const cartItems = await CartModel.getCartItems(ctx.from.id);
+  if (cartItems.length === 0) {
+    ctx.session = {};
+    await ctx.reply('❌ Корзина пуста. Добавьте товары и попробуйте оформить заказ снова.', getMenuKeyboard());
+    return true;
+  }
+  return false;
 }
 
 // Promo codes menu
@@ -1113,7 +1253,8 @@ async function createOrder(ctx, userId) {
     const total = await CartModel.getCartTotal(userId);
     
     if (cartItems.length === 0) {
-      await ctx.reply('❌ Корзина пуста');
+      await ctx.reply('❌ Корзина пуста. Добавьте товары и попробуйте оформить заказ снова.', getMenuKeyboard());
+      ctx.session = {};
       return;
     }
     
@@ -1121,18 +1262,21 @@ async function createOrder(ctx, userId) {
     const pvzNote = ctx.session.pvzSelection ? `ПВЗ: ${ctx.session.pvzSelection}` : null;
     const baseComment = ctx.session.comment || '';
     const combinedComment = pvzNote ? (baseComment ? `${pvzNote}\n${baseComment}` : pvzNote) : baseComment;
+    const phone = ctx.session.phone || null;
+    const deliveryPickupAddress = ctx.session.deliveryPickupAddress || ctx.session.pvzSelection || null;
+    const city = ctx.session.city || deliveryPickupAddress || null;
 
     const orderData = {
       userId: userId,
       customerName: ctx.session.customerName,
-      phone: null,
-      cityCountry: ctx.session.city,
+      phone,
+      cityCountry: city,
       comment: combinedComment,
       totalAmount: total,
       paymentProofUrl: ctx.session.paymentProofUrl || null,
       deliveryGeoId: ctx.session.deliveryGeoId || null,
       deliveryPickupId: ctx.session.deliveryPickupId || null,
-      deliveryPickupAddress: ctx.session.deliveryPickupAddress || null
+      deliveryPickupAddress
     };
     
     const order = await OrderModel.createOrder(orderData);
@@ -1147,6 +1291,7 @@ async function createOrder(ctx, userId) {
 
 Номер заказа: #${order.id}
 Мы получили скриншот оплаты. Свяжемся с вами в Telegram, чтобы подтвердить детали.
+По всем вопросам пишите @fatracing_manager.
     `;
     
     await ctx.reply(message, getMenuKeyboard());

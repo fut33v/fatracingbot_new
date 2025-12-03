@@ -617,6 +617,26 @@ app.put('/api/orders/:id/payment', requireAdmin, async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Order not found' });
     }
+
+    // Notify user about payment confirmation
+    if (isConfirmed && broadcastService) {
+      try {
+        const order = result.rows[0];
+        const userResult = await db.query('SELECT telegram_id FROM users WHERE id = $1', [order.user_id]);
+        const telegramId = userResult.rows?.[0]?.telegram_id;
+        if (telegramId) {
+          const message = [
+            `✅ Оплата по заказу #${order.id} подтверждена!`,
+            'Скоро свяжемся для уточнения деталей.',
+            'Если остались вопросы — @fatracing_manager.'
+          ].join('\n');
+          await broadcastService.sendMessageToUser(telegramId, message);
+        }
+      } catch (notifyError) {
+        console.error('Failed to notify user about payment confirmation:', notifyError);
+      }
+    }
+
     res.json(result.rows[0]);
   } catch (error) {
     console.error('Error confirming payment:', error);
