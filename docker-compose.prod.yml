@@ -50,6 +50,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    command: ["npm", "run", "start:admin"]
     container_name: fatracing_admin
     restart: always
     depends_on:
