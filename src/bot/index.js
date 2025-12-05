@@ -184,7 +184,7 @@ bot.action(/product_(\d+)/, async (ctx) => {
     
     const variants = await ProductModel.getProductVariants(productId);
     
-    const message = buildProductCaption(product);
+    let message = buildProductCaption(product);
     
     const keyboard = [];
     
@@ -239,7 +239,7 @@ bot.action(/variant_(\d+)_(\d+)/, async (ctx) => {
       return;
     }
     
-    const message = buildProductCaption(product, selectedVariant);
+    let message = buildProductCaption(product, selectedVariant);
     
     const keyboard = [
       [Markup.button.callback('➕ В корзину', `add_to_cart_${productId}_${variantId}`)],
@@ -276,15 +276,63 @@ bot.action(/add_to_cart_(\d+)(_(\d+))?/, async (ctx) => {
     if (ctx.from) {
       await UserModel.upsertUser(ctx.from);
     }
-    await CartModel.addToCart(userId, productId, variantId);
+    const product = await ProductModel.getProductById(productId);
+    const genderRequired = product?.genderRequired;
+
+    if (genderRequired) {
+      const variants = await ProductModel.getProductVariants(productId);
+      const selectedVariant = variantId ? variants.find(v => v.id == variantId) : null;
+      const genderKeyboard = [
+        [
+          Markup.button.callback('М', `select_gender_${productId}_${variantId || 0}_m`),
+          Markup.button.callback('Ж', `select_gender_${productId}_${variantId || 0}_f`)
+        ],
+        [Markup.button.callback('🛒 Корзина', 'cart')],
+        [Markup.button.callback('⬅️ Назад', `product_${productId}`)]
+      ];
+      const message = `${buildProductCaption(product, selectedVariant)}\n\nВыберите пол:`;
+      await sendProductView(ctx, {
+        message,
+        keyboard: genderKeyboard,
+        photoUrl: product.photoUrl,
+        images: product.images || [],
+        productId: product.id
+      });
+      await ctx.answerCbQuery();
+      return;
+    }
+
+    await CartModel.addToCart(userId, productId, variantId, 1, null);
     await ctx.answerCbQuery('✅ Добавлено в корзину!');
-    
-    // Show cart after adding
     await showCart(ctx);
   } catch (error) {
     console.error('Error adding to cart:', error);
     try {
       await ctx.answerCbQuery('❌ Ошибка при добавлении в корзину');
+    } catch (callbackError) {
+      console.error('Failed to send callback query:', callbackError);
+    }
+  }
+});
+
+bot.action(/select_gender_(\d+)_(\d+)_([mf])/, async (ctx) => {
+  const userId = ctx.from.id;
+  const productId = ctx.match[1];
+  const variantIdRaw = ctx.match[2];
+  const gender = ctx.match[3];
+  const variantId = variantIdRaw === '0' ? null : variantIdRaw;
+
+  try {
+    if (ctx.from) {
+      await UserModel.upsertUser(ctx.from);
+    }
+    await CartModel.addToCart(userId, productId, variantId, 1, gender);
+    await ctx.answerCbQuery('✅ Добавлено в корзину!');
+    await showCart(ctx);
+  } catch (error) {
+    console.error('Error adding to cart with gender:', error);
+    try {
+      await ctx.answerCbQuery('❌ Ошибка при добавлении');
     } catch (callbackError) {
       console.error('Failed to send callback query:', callbackError);
     }
@@ -1072,6 +1120,9 @@ function buildProductCaption(product, variant) {
   if (product.shippingIncluded) {
     message += '🚚 Доставка за наш счет\n';
   }
+  if (product.sizeGuideUrl) {
+    message += `📏 Размерная сетка: ${product.sizeGuideUrl}\n`;
+  }
   if (product.isPreorder) {
     message += '🕒 Это предзаказ. Сроки и детали уточним после оформления.\n';
     if (product.preorderEndDate) {
@@ -1339,10 +1390,19 @@ async function showCart(ctx) {
     
     let message = '🛒 Ваша корзина:\n\n';
     
+    const formatGender = (gender) => {
+      if (!gender) return '';
+      const lower = gender.toLowerCase();
+      if (lower === 'm') return ' [Мужская]';
+      if (lower === 'f') return ' [Женская]';
+      return ` [${gender}]`;
+    };
+
     for (const item of cartItems) {
       const variantText = item.variant_name ? ` (${item.variant_name})` : '';
+      const genderText = formatGender(item.gender);
       const preorderText = item.is_preorder ? ' (предзаказ)' : '';
-      message += `🔹 ${item.product_name}${variantText}${preorderText} x${item.quantity}\n`;
+      message += `🔹 ${item.product_name}${variantText}${genderText}${preorderText} x${item.quantity}\n`;
       message += `   💰 ${parseFloat(item.product_price) * item.quantity} ${item.product_currency}\n`;
       if (item.is_preorder) {
         message += '   🕒 Товар по предзаказу\n\n';
@@ -1352,11 +1412,11 @@ async function showCart(ctx) {
     }
     
     message += `Итого: ${total.toFixed(2)} RUB\n`;
-    
+    message += '\nЧтобы удалить позицию — нажмите на крестик рядом с товаром.\n';
+
     const keyboard = [
       ...cartItems.map(item => [
-        Markup.button.callback('❌', `remove_from_cart_${item.id}`),
-        Markup.button.callback(`${item.product_name}${item.variant_name ? ` (${item.variant_name})` : ''} x${item.quantity}`, 'noop')
+        Markup.button.callback(`❌ ${item.product_name}${item.variant_name ? ` (${item.variant_name})` : ''}`, `remove_from_cart_${item.id}`)
       ]),
       [
         Markup.button.callback('🔄 Очистить корзину', 'clear_cart'),

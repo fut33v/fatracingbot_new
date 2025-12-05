@@ -126,6 +126,7 @@ async function getOrdersWithItemsByTelegramId(telegramId) {
       orderId: row.order_id,
       productId: row.product_id,
       variantId: row.variant_id,
+      gender: row.gender,
       quantity: row.quantity,
       pricePerUnit: parseFloat(row.price_per_unit),
       productName: row.product_name || 'Товар',
@@ -147,8 +148,8 @@ async function getOrdersWithItemsByTelegramId(telegramId) {
 async function createOrderItems(orderId, cartItems) {
   const query = `
     INSERT INTO order_items (
-      order_id, product_id, variant_id, quantity, price_per_unit
-    ) VALUES ($1, $2, $3, $4, $5)`;
+      order_id, product_id, variant_id, gender, quantity, price_per_unit
+    ) VALUES ($1, $2, $3, $4, $5, $6)`;
   
   try {
     for (const item of cartItems) {
@@ -156,6 +157,7 @@ async function createOrderItems(orderId, cartItems) {
         orderId,
         item.product_id,
         item.variant_id,
+        item.gender || null,
         item.quantity,
         item.product_price
       ];

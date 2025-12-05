@@ -34,4 +34,5 @@ module.exports = {
     return pool.query(text, params);
   },
   getClient: async () => pool.connect(),
+  pool
 };

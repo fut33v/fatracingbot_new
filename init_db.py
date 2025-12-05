@@ -10,6 +10,89 @@ DB_NAME = os.environ.get('DB_NAME', 'fatracing_bot')
 DB_USER = os.environ.get('DB_USER', 'fatracingbot')
 DB_PASSWORD = os.environ.get('DB_PASSWORD', 'fatracingbot228')
 
+def apply_migrations(conn, cursor):
+    """Idempotent migrations for existing databases."""
+    cursor.execute("""
+        ALTER TABLE broadcasts
+        ADD COLUMN IF NOT EXISTS use_markdown BOOLEAN DEFAULT FALSE
+    """)
+    cursor.execute("""
+        ALTER TABLE products
+        ADD COLUMN IF NOT EXISTS is_preorder BOOLEAN DEFAULT FALSE
+    """)
+    cursor.execute("""
+        ALTER TABLE products
+        ADD COLUMN IF NOT EXISTS preorder_end_date DATE
+    """)
+    cursor.execute("""
+        ALTER TABLE products
+        ADD COLUMN IF NOT EXISTS estimated_delivery_date DATE
+    """)
+    cursor.execute("""
+        ALTER TABLE products
+        ADD COLUMN IF NOT EXISTS cost DECIMAL(10, 2) DEFAULT 0
+    """)
+    cursor.execute("""
+        ALTER TABLE products
+        ADD COLUMN IF NOT EXISTS shipping_included BOOLEAN DEFAULT FALSE
+    """)
+    cursor.execute("""
+        ALTER TABLE products
+        ADD COLUMN IF NOT EXISTS shipping_cost DECIMAL(10, 2) DEFAULT 0
+    """)
+    cursor.execute("""
+        ALTER TABLE products
+        ADD COLUMN IF NOT EXISTS gender_required BOOLEAN DEFAULT FALSE
+    """)
+    cursor.execute("""
+        ALTER TABLE products
+        ADD COLUMN IF NOT EXISTS size_guide_url VARCHAR(512)
+    """)
+    cursor.execute("""
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS payment_proof_url TEXT
+    """)
+    cursor.execute("""
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS payment_confirmed BOOLEAN DEFAULT FALSE
+    """)
+    cursor.execute("""
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS payment_confirmed_at TIMESTAMP
+    """)
+    cursor.execute("""
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS delivery_geo_id INTEGER
+    """)
+    cursor.execute("""
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS delivery_pickup_id TEXT
+    """)
+    cursor.execute("""
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS delivery_pickup_address TEXT
+    """)
+    cursor.execute("""
+        ALTER TABLE cart_items
+        ADD COLUMN IF NOT EXISTS gender VARCHAR(1)
+    """)
+    cursor.execute("""
+        ALTER TABLE order_items
+        ADD COLUMN IF NOT EXISTS gender VARCHAR(1)
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS product_images (
+            id SERIAL PRIMARY KEY,
+            product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+            url VARCHAR(512) NOT NULL,
+            position INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_product_images_product_id ON product_images(product_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_product_images_position ON product_images(position)")
+    conn.commit()
+
 def connect_to_db():
     """Establish database connection with retries"""
     max_retries = 10
@@ -59,12 +142,8 @@ def init_database():
         
         if users_table_exists:
             # Apply schema updates when tables already exist
-            cursor.execute("""
-                ALTER TABLE broadcasts
-                ADD COLUMN IF NOT EXISTS use_markdown BOOLEAN DEFAULT FALSE
-            """)
-            conn.commit()
-            print("✅ Database tables already exist, skipping initialization")
+            apply_migrations(conn, cursor)
+            print("✅ Database tables already exist, applied migrations")
             cursor.close()
             conn.close()
             return True
@@ -109,6 +188,8 @@ def init_database():
                 shipping_cost DECIMAL(10, 2) DEFAULT 0,
                 currency VARCHAR(3) DEFAULT 'RUB',
                 photo_url VARCHAR(512),
+                size_guide_url VARCHAR(512),
+                gender_required BOOLEAN DEFAULT FALSE,
                 stock INTEGER DEFAULT 0,
                 is_preorder BOOLEAN DEFAULT FALSE,
                 preorder_end_date DATE,
@@ -118,6 +199,19 @@ def init_database():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        
+        # Product images table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS product_images (
+                id SERIAL PRIMARY KEY,
+                product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+                url VARCHAR(512) NOT NULL,
+                position INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_product_images_product_id ON product_images(product_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_product_images_position ON product_images(position)")
         
         # Product variants table
         cursor.execute("""
@@ -159,6 +253,7 @@ def init_database():
                 order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
                 product_id INTEGER REFERENCES products(id),
                 variant_id INTEGER REFERENCES product_variants(id),
+                gender VARCHAR(1),
                 quantity INTEGER NOT NULL,
                 price_per_unit DECIMAL(10, 2) NOT NULL
             )
@@ -198,59 +293,8 @@ def init_database():
             )
         """)
 
-        # Ensure new columns exist when upgrading existing DBs
-        cursor.execute("""
-            ALTER TABLE broadcasts
-            ADD COLUMN IF NOT EXISTS use_markdown BOOLEAN DEFAULT FALSE
-        """)
-        cursor.execute("""
-            ALTER TABLE products
-            ADD COLUMN IF NOT EXISTS is_preorder BOOLEAN DEFAULT FALSE
-        """)
-        cursor.execute("""
-            ALTER TABLE products
-            ADD COLUMN IF NOT EXISTS preorder_end_date DATE
-        """)
-        cursor.execute("""
-            ALTER TABLE products
-            ADD COLUMN IF NOT EXISTS estimated_delivery_date DATE
-        """)
-        cursor.execute("""
-            ALTER TABLE products
-            ADD COLUMN IF NOT EXISTS cost DECIMAL(10, 2) DEFAULT 0
-        """)
-        cursor.execute("""
-            ALTER TABLE products
-            ADD COLUMN IF NOT EXISTS shipping_included BOOLEAN DEFAULT FALSE
-        """)
-        cursor.execute("""
-            ALTER TABLE products
-            ADD COLUMN IF NOT EXISTS shipping_cost DECIMAL(10, 2) DEFAULT 0
-        """)
-        cursor.execute("""
-            ALTER TABLE orders
-            ADD COLUMN IF NOT EXISTS payment_proof_url TEXT
-        """)
-        cursor.execute("""
-            ALTER TABLE orders
-            ADD COLUMN IF NOT EXISTS payment_confirmed BOOLEAN DEFAULT FALSE
-        """)
-        cursor.execute("""
-            ALTER TABLE orders
-            ADD COLUMN IF NOT EXISTS payment_confirmed_at TIMESTAMP
-        """)
-        cursor.execute("""
-            ALTER TABLE orders
-            ADD COLUMN IF NOT EXISTS delivery_geo_id INTEGER
-        """)
-        cursor.execute("""
-            ALTER TABLE orders
-            ADD COLUMN IF NOT EXISTS delivery_pickup_id TEXT
-        """)
-        cursor.execute("""
-            ALTER TABLE orders
-            ADD COLUMN IF NOT EXISTS delivery_pickup_address TEXT
-        """)
+        # Ensure new columns/table exist when upgrading existing DBs
+        apply_migrations(conn, cursor)
         
         # Channel membership tracking
         cursor.execute("""
@@ -272,6 +316,7 @@ def init_database():
                 user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
                 product_id INTEGER REFERENCES products(id),
                 variant_id INTEGER REFERENCES product_variants(id),
+                gender VARCHAR(1),
                 quantity INTEGER NOT NULL DEFAULT 1,
                 added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )

@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS products (
     shipping_cost DECIMAL(10, 2) DEFAULT 0,
     currency VARCHAR(3) DEFAULT 'RUB',
     photo_url VARCHAR(512),
+    size_guide_url VARCHAR(512),
+    gender_required BOOLEAN DEFAULT FALSE,
     stock INTEGER DEFAULT 0,
     is_preorder BOOLEAN DEFAULT FALSE,
     preorder_end_date DATE,
@@ -91,6 +93,7 @@ CREATE TABLE IF NOT EXISTS order_items (
     order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
     product_id INTEGER REFERENCES products(id),
     variant_id INTEGER REFERENCES product_variants(id),
+    gender VARCHAR(1),
     quantity INTEGER NOT NULL,
     price_per_unit DECIMAL(10, 2) NOT NULL
 );
@@ -142,6 +145,7 @@ CREATE TABLE IF NOT EXISTS cart_items (
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     product_id INTEGER REFERENCES products(id),
     variant_id INTEGER REFERENCES product_variants(id),
+    gender VARCHAR(1),
     quantity INTEGER NOT NULL DEFAULT 1,
     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

@@ -1,7 +1,7 @@
 const db = require('./database');
 
 // Add item to cart
-async function addToCart(userId, productId, variantId = null, quantity = 1) {
+async function addToCart(userId, productId, variantId = null, quantity = 1, gender = null) {
   const userRow = await db.query('SELECT id FROM users WHERE telegram_id = $1', [userId]);
   const dbUserId = userRow.rows[0]?.id;
   if (!dbUserId) {
@@ -9,8 +9,8 @@ async function addToCart(userId, productId, variantId = null, quantity = 1) {
   }
 
   // First, check if this item is already in the cart
-  const checkQuery = 'SELECT id, quantity FROM cart_items WHERE user_id = $1 AND product_id = $2 AND (variant_id = $3 OR (variant_id IS NULL AND $3 IS NULL))';
-  const checkResult = await db.query(checkQuery, [dbUserId, productId, variantId]);
+  const checkQuery = 'SELECT id, quantity FROM cart_items WHERE user_id = $1 AND product_id = $2 AND (variant_id = $3 OR (variant_id IS NULL AND $3 IS NULL)) AND (gender = $4 OR (gender IS NULL AND $4 IS NULL))';
+  const checkResult = await db.query(checkQuery, [dbUserId, productId, variantId, gender]);
   
   if (checkResult.rows.length > 0) {
     // Update existing cart item
@@ -18,8 +18,8 @@ async function addToCart(userId, productId, variantId = null, quantity = 1) {
     return await db.query(updateQuery, [quantity, checkResult.rows[0].id]);
   } else {
     // Insert new cart item
-    const insertQuery = 'INSERT INTO cart_items (user_id, product_id, variant_id, quantity) VALUES ($1, $2, $3, $4) RETURNING *';
-    return await db.query(insertQuery, [dbUserId, productId, variantId, quantity]);
+    const insertQuery = 'INSERT INTO cart_items (user_id, product_id, variant_id, gender, quantity) VALUES ($1, $2, $3, $4, $5) RETURNING *';
+    return await db.query(insertQuery, [dbUserId, productId, variantId, gender, quantity]);
   }
 }
 
@@ -33,6 +33,7 @@ async function getCartItems(userId) {
     SELECT 
       ci.id,
       ci.quantity,
+      ci.gender,
       p.id as product_id,
       p.name as product_name,
       p.price as product_price,

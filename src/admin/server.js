@@ -20,6 +20,7 @@ const PRODUCT_WITH_IMAGES_QUERY = `
   WHERE p.id = $1
   GROUP BY p.id
 `;
+const PRODUCT_VARIANTS_QUERY = 'SELECT id, name, stock FROM product_variants WHERE product_id = $1 ORDER BY name';
 const ALL_PRODUCTS_WITH_IMAGES_QUERY = `
   SELECT p.*,
     COALESCE(
@@ -72,6 +73,31 @@ async function saveProductImages(client, productId, images) {
 async function fetchProductWithImages(productId) {
   const result = await db.query(PRODUCT_WITH_IMAGES_QUERY, [productId]);
   return result.rows[0] || null;
+}
+
+async function fetchProductVariants(productId) {
+  const result = await db.query(PRODUCT_VARIANTS_QUERY, [productId]);
+  return result.rows || [];
+}
+
+async function saveProductVariants(client, productId, variants = []) {
+  await client.query('DELETE FROM product_variants WHERE product_id = $1', [productId]);
+  if (!variants || variants.length === 0) return;
+  for (const variant of variants) {
+    if (!variant?.name) continue;
+    const stock = Number.isNaN(parseInt(variant.stock, 10)) ? 0 : parseInt(variant.stock, 10);
+    await client.query(
+      'INSERT INTO product_variants (product_id, name, stock) VALUES ($1, $2, $3)',
+      [productId, variant.name.trim(), stock]
+    );
+  }
+}
+
+async function fetchProductFull(productId) {
+  const product = await fetchProductWithImages(productId);
+  if (!product) return null;
+  const variants = await fetchProductVariants(productId);
+  return { ...product, variants };
 }
 
 const app = express();
@@ -310,7 +336,7 @@ app.get('/api/products', requireAdmin, async (req, res) => {
 app.get('/api/products/:id', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const product = await fetchProductWithImages(id);
+    const product = await fetchProductFull(id);
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
@@ -336,7 +362,10 @@ app.post('/api/products', requireAdmin, async (req, res) => {
       currency,
       stock,
       photo_url,
+      size_guide_url,
+      gender_required,
       images,
+      variants,
       status,
       is_preorder,
       preorder_end_date,
@@ -349,8 +378,8 @@ app.post('/api/products', requireAdmin, async (req, res) => {
     try {
       await client.query('BEGIN');
       const insertResult = await client.query(
-        `INSERT INTO products (name, description, price, cost, shipping_included, shipping_cost, currency, stock, photo_url, status, is_preorder, preorder_end_date, estimated_delivery_date)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
+        `INSERT INTO products (name, description, price, cost, shipping_included, shipping_cost, currency, stock, photo_url, size_guide_url, status, is_preorder, preorder_end_date, estimated_delivery_date)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
         [
           name,
           description,
@@ -361,6 +390,8 @@ app.post('/api/products', requireAdmin, async (req, res) => {
           currency || 'RUB',
           stock || 0,
           coverUrl,
+          size_guide_url || null,
+          gender_required === true,
           status || 'active',
           is_preorder === true,
           preorder_end_date || null,
@@ -370,9 +401,10 @@ app.post('/api/products', requireAdmin, async (req, res) => {
 
       const productId = insertResult.rows[0].id;
       await saveProductImages(client, productId, normalizedImages);
+      await saveProductVariants(client, productId, variants);
       await client.query('COMMIT');
 
-      const created = await fetchProductWithImages(productId);
+      const created = await fetchProductFull(productId);
       res.json(created || insertResult.rows[0]);
     } catch (dbError) {
       await client.query('ROLLBACK');
@@ -402,14 +434,17 @@ app.put('/api/products/:id', requireAdmin, async (req, res) => {
       currency,
       stock,
       photo_url,
+      size_guide_url,
+      gender_required,
       images,
+      variants,
       status,
       is_preorder,
       preorder_end_date,
       estimated_delivery_date
     } = req.body;
 
-    const existing = await fetchProductWithImages(id);
+    const existing = await fetchProductFull(id);
     if (!existing) {
       return res.status(404).json({ error: 'Product not found' });
     }
@@ -424,9 +459,9 @@ app.put('/api/products/:id', requireAdmin, async (req, res) => {
       await client.query('BEGIN');
       const result = await client.query(
         `UPDATE products
-         SET name = $1, description = $2, price = $3, cost = $4, shipping_included = $5, shipping_cost = $6, currency = $7, stock = $8, photo_url = $9, status = $10, is_preorder = $11,
-             preorder_end_date = $12, estimated_delivery_date = $13, updated_at = CURRENT_TIMESTAMP
-         WHERE id = $14 RETURNING id`,
+         SET name = $1, description = $2, price = $3, cost = $4, shipping_included = $5, shipping_cost = $6, currency = $7, stock = $8, photo_url = $9, size_guide_url = $10, gender_required = $11, status = $12, is_preorder = $13,
+             preorder_end_date = $14, estimated_delivery_date = $15, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $16 RETURNING id`,
         [
           name,
           description,
@@ -437,6 +472,8 @@ app.put('/api/products/:id', requireAdmin, async (req, res) => {
           currency,
           stock,
           coverUrl,
+          size_guide_url || null,
+          gender_required === true,
           status,
           is_preorder === true,
           preorder_end_date || null,
@@ -453,10 +490,11 @@ app.put('/api/products/:id', requireAdmin, async (req, res) => {
       }
 
       await saveProductImages(client, id, normalizedImages);
+      await saveProductVariants(client, id, variants);
       await client.query('COMMIT');
 
-      const updated = await fetchProductWithImages(id);
-      res.json(updated || { ...existing, photo_url: coverUrl, images: normalizedImages });
+      const updated = await fetchProductFull(id);
+      res.json(updated || { ...existing, photo_url: coverUrl, images: normalizedImages, variants });
     } catch (dbError) {
       await client.query('ROLLBACK');
       throw dbError;
@@ -659,7 +697,27 @@ app.get('/api/orders/:id', requireAdmin, async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Order not found' });
     }
-    res.json(result.rows[0]);
+    const order = result.rows[0];
+
+    // fetch items with product/variant info
+    const itemsResult = await db.query(
+      `SELECT oi.id,
+              oi.product_id,
+              p.name AS product_name,
+              oi.variant_id,
+              pv.name AS variant_name,
+              oi.gender,
+              oi.quantity,
+              oi.price_per_unit
+       FROM order_items oi
+       LEFT JOIN products p ON oi.product_id = p.id
+       LEFT JOIN product_variants pv ON oi.variant_id = pv.id
+       WHERE oi.order_id = $1
+       ORDER BY oi.id`,
+      [id]
+    );
+    order.items = itemsResult.rows;
+    res.json(order);
   } catch (error) {
     console.error('Error fetching order:', error);
     res.status(500).json({ error: 'Failed to fetch order' });
