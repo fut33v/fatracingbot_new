@@ -383,8 +383,8 @@ app.post('/api/products', requireAdmin, async (req, res) => {
     try {
       await client.query('BEGIN');
       const insertResult = await client.query(
-        `INSERT INTO products (name, description, price, cost, shipping_included, shipping_cost, currency, stock, photo_url, size_guide_url, status, is_preorder, preorder_end_date, estimated_delivery_date)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
+        `INSERT INTO products (name, description, price, cost, shipping_included, shipping_cost, currency, photo_url, size_guide_url, gender_required, stock, is_preorder, preorder_end_date, estimated_delivery_date, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
         [
           name,
           description,
@@ -393,14 +393,14 @@ app.post('/api/products', requireAdmin, async (req, res) => {
           shipping_included === true,
           shipping_cost || 0,
           currency || 'RUB',
-          stock || 0,
           coverUrl,
           size_guide_url || null,
           gender_required === true,
-          status || 'active',
+          stock || 0,
           is_preorder === true,
           preorder_end_date || null,
-          estimated_delivery_date || null
+          estimated_delivery_date || null,
+          status || 'active',
         ]
       );
 

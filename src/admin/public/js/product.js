@@ -172,6 +172,27 @@
             </div>
         </div>
     `;
+    attachVariantsToggleHandler();
+  }
+
+  function attachVariantsToggleHandler() {
+    const checkbox = document.getElementById('product-has-sizes');
+    if (!checkbox) return;
+    checkbox.addEventListener('change', handleVariantsToggle);
+  }
+
+  function handleVariantsToggle() {
+    const checkbox = document.getElementById('product-has-sizes');
+    const section = document.getElementById('variants-section');
+    if (!checkbox || !section) return;
+    const enabled = checkbox.checked;
+    section.style.display = enabled ? 'block' : 'none';
+    if (enabled) {
+      const rows = section.querySelectorAll('.product-variant-row');
+      if (rows.length === 0) {
+        addVariantRow();
+      }
+    }
   }
 
   function showAddProductForm() {
