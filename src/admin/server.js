@@ -274,13 +274,14 @@ app.get('/api/dashboard/stats', requireAdmin, async (req, res) => {
   try {
     console.log('Dashboard stats requested by user:', req.session.user.first_name);
     
-    // Get total users
-    const usersResult = await db.query('SELECT COUNT(*) as count FROM users');
-    const totalUsers = parseInt(usersResult.rows[0].count);
-    
-    // Get users with broadcast consent
-    const consentResult = await db.query('SELECT COUNT(*) as count FROM users WHERE consent_to_broadcast = TRUE');
-    const consentUsers = parseInt(consentResult.rows[0].count);
+    // Users
+    const totalUsersResult = await db.query('SELECT COUNT(*) as count FROM users');
+    const totalUsers = parseInt(totalUsersResult.rows[0].count);
+    const activeUsersResult = await db.query('SELECT COUNT(*) as count FROM users WHERE is_blocked = FALSE');
+    const activeUsers = parseInt(activeUsersResult.rows[0].count);
+    const blockedResult = await db.query('SELECT COUNT(*) as count FROM users WHERE is_blocked = TRUE');
+    const blockedUsers = parseInt(blockedResult.rows[0].count);
+    const consentUsers = activeUsers; // legacy field for UI; equals active users
     
     // Get new orders
     const ordersResult = await db.query('SELECT COUNT(*) as count FROM orders WHERE status = $1', ['new']);
@@ -299,14 +300,18 @@ app.get('/api/dashboard/stats', requireAdmin, async (req, res) => {
        WHERE o.payment_confirmed = TRUE`
     );
     const confirmedCost = parseFloat(costResult.rows[0].total_cost);
-    const netProfit = (confirmedRevenue || 0) - (confirmedCost || 0);
+    const tax = (confirmedRevenue || 0) * 0.06;
+    const netProfit = (confirmedRevenue || 0) - (confirmedCost || 0) - tax;
     
     res.json({
       totalUsers,
+      activeUsers,
       consentUsers,
+      blockedUsers,
       newOrders,
       totalRevenue: confirmedRevenue || totalRevenue,
       totalCost: confirmedCost || 0,
+      tax: tax || 0,
       netProfit
     });
   } catch (error) {
@@ -866,6 +871,21 @@ app.get('/api/users', requireAdmin, async (req, res) => {
   }
 });
 
+// Get user by id
+app.get('/api/users/:id', requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await db.query('SELECT * FROM users WHERE id = $1', [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error fetching user:', error);
+    res.status(500).json({ error: 'Failed to fetch user' });
+  }
+});
+
 // Get all broadcasts
 app.get('/api/broadcasts', requireAdmin, async (req, res) => {
   try {
@@ -878,6 +898,27 @@ app.get('/api/broadcasts', requireAdmin, async (req, res) => {
     res.status(500).json({
       error: 'Failed to fetch broadcasts'
     });
+  }
+});
+
+// Get broadcast by id
+app.get('/api/broadcasts/:id', requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const broadcastId = parseInt(id, 10);
+    if (!broadcastId) {
+      return res.status(400).json({ error: 'Invalid broadcast id' });
+    }
+
+    const result = await db.query('SELECT * FROM broadcasts WHERE id = $1', [broadcastId]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Broadcast not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error fetching broadcast:', error);
+    res.status(500).json({ error: 'Failed to fetch broadcast' });
   }
 });
 
@@ -1038,6 +1079,28 @@ app.put('/api/broadcasts/:id/status', requireAdmin, async (req, res) => {
     res.status(500).json({
       error: 'Failed to update broadcast status'
     });
+  }
+});
+
+// Delete broadcast
+app.delete('/api/broadcasts/:id', requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const broadcastId = parseInt(id, 10);
+    if (!broadcastId) {
+      return res.status(400).json({ error: 'Invalid broadcast id' });
+    }
+
+    const existing = await db.query('SELECT * FROM broadcasts WHERE id = $1', [broadcastId]);
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'Broadcast not found' });
+    }
+
+    await db.query('DELETE FROM broadcasts WHERE id = $1', [broadcastId]);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting broadcast:', error);
+    res.status(500).json({ error: 'Failed to delete broadcast' });
   }
 });
 

@@ -195,6 +195,24 @@
         .checkbox-group input {
             width: auto;
         }
+        .clickable-row {
+            cursor: pointer;
+        }
+        .clickable-row:hover {
+            background-color: #f8f9fa;
+        }
+        .actions-right {
+            text-align: right;
+            white-space: nowrap;
+        }
+        .form-inline {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .form-inline .form-group {
+            margin-bottom: 0;
+        }
     </style>
 </head>
 <body>
@@ -288,6 +306,20 @@
                     return;
                 }
             }
+            if (hash.startsWith('#/broadcasts/')) {
+                const id = hash.replace('#/broadcasts/', '');
+                if (id) {
+                    viewBroadcast(id);
+                    return;
+                }
+            }
+            if (hash.startsWith('#/users/')) {
+                const id = hash.replace('#/users/', '');
+                if (id) {
+                    viewUser(id);
+                    return;
+                }
+            }
 
             const handler = routes[hash] || loadDashboard;
             handler();
@@ -297,7 +329,11 @@
             const links = document.querySelectorAll('.nav a');
             links.forEach(link => {
                 const href = link.getAttribute('href');
-                const isActive = href === hash || (href === '#/orders' && hash.startsWith('#/orders'));
+                const isOrders = href === '#/orders' && hash.startsWith('#/orders');
+                const isUsers = href === '#/users' && hash.startsWith('#/users');
+                const isBroadcasts = href === '#/broadcasts' && hash.startsWith('#/broadcasts');
+                const isPromos = href === '#/promos' && hash.startsWith('#/promos');
+                const isActive = href === hash || isOrders || isUsers || isBroadcasts || isPromos;
                 if (isActive) {
                     link.classList.add('active');
                 } else {
@@ -349,9 +385,14 @@
                                 <p>Всего в боте</p>
                             </div>
                             <div class="card">
-                                <h3>Подписчики</h3>
-                                <div class="stats-number">${data.consentUsers}</div>
-                                <p>Активные</p>
+                                <h3>Активные пользователи</h3>
+                                <div class="stats-number">${data.activeUsers || data.consentUsers}</div>
+                                <p>Не заблокированные</p>
+                            </div>
+                            <div class="card">
+                                <h3>Блокировки бота</h3>
+                                <div class="stats-number">${data.blockedUsers || 0}</div>
+                                <p>Пользователи, у которых бот заблокирован</p>
                             </div>
                             <div class="card">
                                 <h3>Заказы</h3>
@@ -366,7 +407,7 @@
                             <div class="card">
                                 <h3>Чистая прибыль</h3>
                                 <div class="stats-number">${(data.netProfit || 0).toFixed(2)} ₽</div>
-                                <p>Подтверждённые оплаты минус себестоимость</p>
+                                <p>Подтверждённые оплаты минус себестоимость и 6% налог</p>
                             </div>
                         </div>
                         <div class="content">
@@ -476,54 +517,6 @@
                 });
         }
 
-        // Promos
-        function loadPromos() {
-            showLoading();
-            
-            fetch('/api/promos', { credentials: 'include' })
-                .then(response => response.json())
-                .then(promos => {
-                    document.getElementById('content').innerHTML = `
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <h2>Промокоды</h2>
-                            <button class="btn" onclick="showAddPromoForm()">Добавить промокод</button>
-                        </div>
-                        <div class="content">
-                            ${promos.length > 0 ? `
-                                <table>
-                                    <thead>
-                                        <tr>
-                                            <th>ID</th>
-                                            <th>Партнёр</th>
-                                            <th>Промокод</th>
-                                            <th>Статус</th>
-                                            <th>Действия</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        ${promos.map(promo => `
-                                            <tr>
-                                                <td>${promo.id}</td>
-                                                <td>${promo.partner_name}</td>
-                                                <td>${promo.code}</td>
-                                                <td>${promo.status}</td>
-                                                <td>
-                                                    <button class="btn" onclick="editPromo(${promo.id})">Редактировать</button>
-                                                </td>
-                                            </tr>
-                                        `).join('')}
-                                    </tbody>
-                                </table>
-                            ` : '<p style="text-align: center;">Нет промокодов</p>'}
-                        </div>
-                    `;
-                })
-                .catch(error => {
-                    console.error('Error loading promos:', error);
-                    showError('Не удалось загрузить промокоды');
-                });
-        }
-
         // Broadcasts
         function loadBroadcasts() {
             showLoading();
@@ -551,17 +544,17 @@
                                     </thead>
                                     <tbody>
                                         ${broadcasts.map(broadcast => `
-                                            <tr>
+                                            <tr class="clickable-row" onclick="viewBroadcast(${broadcast.id})">
                                                 <td>${broadcast.id}</td>
                                                 <td>${broadcast.title}</td>
                                                 <td>${broadcast.status}</td>
                                                 <td>${broadcast.sent_count || 0}</td>
                                                 <td>${formatDate(broadcast.created_at)}</td>
-                                                <td>
-                                                    <button class="btn" onclick="editBroadcast(${broadcast.id})">Редактировать</button>
+                                                <td class="actions-right">
                                                     ${broadcast.status === 'draft' ? 
-                                                        `<button class="btn btn-success" onclick="sendBroadcast(${broadcast.id})">Отправить</button>` : 
+                                                        `<button class="btn btn-success" onclick="event.stopPropagation(); sendBroadcast(${broadcast.id})">Отправить</button>` : 
                                                         ''}
+                                                    <button class="btn btn-danger" onclick="event.stopPropagation(); deleteBroadcast(${broadcast.id})">Удалить</button>
                                                 </td>
                                             </tr>
                                         `).join('')}
@@ -575,6 +568,145 @@
                     console.error('Error loading broadcasts:', error);
                     showError('Не удалось загрузить рассылки');
                 });
+        }
+
+        // Promos
+        function loadPromos() {
+            showLoading();
+
+            fetch('/api/promos', { credentials: 'include' })
+                .then(response => response.json())
+                .then(promos => {
+                    document.getElementById('content').innerHTML = `
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <h2>Промокоды</h2>
+                            <button class="btn" onclick="showAddPromoForm()">Добавить промокод</button>
+                        </div>
+                        <div class="content">
+                            ${promos.length > 0 ? `
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>ID</th>
+                                            <th>Партнер</th>
+                                            <th>Код</th>
+                                            <th>Ссылка</th>
+                                            <th>Статус</th>
+                                            <th>Период</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${promos.map(promo => `
+                                            <tr>
+                                                <td>${promo.id}</td>
+                                                <td>${promo.partner_name}</td>
+                                                <td><code>${promo.code}</code></td>
+                                                <td>${promo.link ? `<a href="${promo.link}" target="_blank" rel="noopener noreferrer">Сайт</a>` : '-'}</td>
+                                                <td>${promo.status}</td>
+                                                <td>${(promo.start_date || promo.end_date) ? `${promo.start_date ? formatDate(promo.start_date) : '—'} — ${promo.end_date ? formatDate(promo.end_date) : '—'}` : '-'}</td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            ` : '<p style="text-align: center;">Нет промокодов</p>'}
+                        </div>
+                    `;
+                })
+                .catch(error => {
+                    console.error('Error loading promos:', error);
+                    showError('Не удалось загрузить промокоды');
+                });
+        }
+
+        function showAddPromoForm() {
+            document.getElementById('content').innerHTML = `
+                <h2>Добавить промокод</h2>
+                <div class="content">
+                    <div class="form-group">
+                        <label for="promo-partner">Партнер</label>
+                        <input id="promo-partner" type="text" placeholder="Название партнера" required />
+                    </div>
+                    <div class="form-group">
+                        <label for="promo-description">Описание</label>
+                        <textarea id="promo-description" rows="3" placeholder="Краткое описание" required></textarea>
+                    </div>
+                    <div class="form-inline">
+                        <div class="form-group">
+                            <label for="promo-code">Промокод</label>
+                            <input id="promo-code" type="text" placeholder="PROMO2024" required />
+                        </div>
+                        <div class="form-group">
+                            <label for="promo-link">Ссылка</label>
+                            <input id="promo-link" type="url" placeholder="https://partner.com" />
+                        </div>
+                    </div>
+                    <div class="form-inline">
+                        <div class="form-group">
+                            <label for="promo-start">Дата начала</label>
+                            <input id="promo-start" type="date" />
+                        </div>
+                        <div class="form-group">
+                            <label for="promo-end">Дата окончания</label>
+                            <input id="promo-end" type="date" />
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="promo-status">Статус</label>
+                        <select id="promo-status">
+                            <option value="active" selected>active</option>
+                            <option value="inactive">inactive</option>
+                        </select>
+                    </div>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;">
+                        <button class="btn btn-success" onclick="createPromo()">Сохранить</button>
+                        <button class="btn" onclick="loadPromos()">Назад</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function createPromo() {
+            try {
+                const partner = document.getElementById('promo-partner').value.trim();
+                const description = document.getElementById('promo-description').value.trim();
+                const code = document.getElementById('promo-code').value.trim();
+                const link = document.getElementById('promo-link').value.trim();
+                const start = document.getElementById('promo-start').value;
+                const end = document.getElementById('promo-end').value;
+                const status = document.getElementById('promo-status').value;
+
+                if (!partner || !description || !code) {
+                    alert('Заполните партнера, описание и код');
+                    return;
+                }
+
+                const payload = {
+                    partner_name: partner,
+                    description,
+                    code,
+                    link: link || null,
+                    start_date: start || null,
+                    end_date: end || null,
+                    status
+                };
+
+                const response = await fetch('/api/promos', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+                alert('Промокод добавлен');
+                loadPromos();
+            } catch (error) {
+                console.error('Error creating promo:', error);
+                alert('Ошибка при создании промокода');
+            }
         }
 
         // Users
@@ -597,17 +729,19 @@
                                             <th>Username</th>
                                             <th>Подписка</th>
                                             <th>Рассылка</th>
+                                            <th>Заблокировал бота</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         ${users.map(user => `
-                                            <tr>
+                                            <tr class="clickable-row" onclick="viewUser(${user.id})">
                                                 <td>${user.id}</td>
                                                 <td>${user.telegram_id}</td>
                                                 <td>${user.first_name} ${user.last_name || ''}</td>
-                                                <td>${user.username || '-'}</td>
+                                                <td>${user.username ? `<a href="https://t.me/${user.username}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">@${user.username}</a>` : '-'}</td>
                                                 <td>${formatDate(user.created_at)}</td>
                                                 <td>${user.consent_to_broadcast ? 'Да' : 'Нет'}</td>
+                                                <td>${user.is_blocked ? 'Да' : 'Нет'}</td>
                                             </tr>
                                         `).join('')}
                                     </tbody>
@@ -622,11 +756,45 @@
                 });
         }
 
-        // Product forms and CRUD helpers moved to /js/product.js
+        async function viewUser(userId) {
+            window.location.hash = `#/users/${userId}`;
+            showLoading();
+            try {
+                const response = await fetch(`/api/users/${userId}`, { credentials: 'include' });
+                const user = await response.json();
+                if (user.error) {
+                    showError(user.error);
+                    return;
+                }
 
-        function showAddPromoForm() {
-            alert('Форма добавления промокода будет реализована позже');
+                const usernameLink = user.username ? `<a href="https://t.me/${user.username}" target="_blank" rel="noopener noreferrer">@${user.username}</a>` : '-';
+
+                document.getElementById('content').innerHTML = `
+                    <h2>Пользователь #${user.id}</h2>
+                    <div class="content">
+                        <p><strong>Telegram ID:</strong> ${user.telegram_id}</p>
+                        <p><strong>Username:</strong> ${usernameLink}</p>
+                        <p><strong>Имя:</strong> ${user.first_name || '-'} ${user.last_name || ''}</p>
+                        <p><strong>Язык:</strong> ${user.language_code || '-'}</p>
+                        <p><strong>Премиум:</strong> ${user.is_premium ? 'Да' : 'Нет'}</p>
+                        <p><strong>Бот:</strong> ${user.is_bot ? 'Да' : 'Нет'}</p>
+                        <p><strong>Согласие на рассылку:</strong> ${user.consent_to_broadcast ? 'Да' : 'Нет'}</p>
+                        <p><strong>Заблокировал бота:</strong> ${user.is_blocked ? 'Да' : 'Нет'}</p>
+                        <p><strong>Дата регистрации:</strong> ${formatDate(user.created_at)}</p>
+                        <p><strong>Последняя активность:</strong> ${formatDate(user.last_interaction)}</p>
+                        <p><strong>Обновлен:</strong> ${formatDate(user.updated_at)}</p>
+                        <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+                            <button class="btn" onclick="window.location.hash = '#/users'; loadUsers()">Назад к пользователям</button>
+                        </div>
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Error loading user:', error);
+                showError('Не удалось загрузить пользователя');
+            }
         }
+
+        // Product forms and CRUD helpers moved to /js/product.js
 
         function showAddBroadcastForm() {
             document.getElementById('content').innerHTML = `
@@ -1017,6 +1185,74 @@
                     alert('Ошибка при отправке рассылки');
                 });
             }
+        }
+
+        async function viewBroadcast(broadcastId) {
+            window.location.hash = `#/broadcasts/${broadcastId}`;
+            showLoading();
+            try {
+                const response = await fetch(`/api/broadcasts/${broadcastId}`, { credentials: 'include' });
+                const broadcast = await response.json();
+                if (broadcast.error) {
+                    showError(broadcast.error);
+                    return;
+                }
+
+                const buttonsValue = broadcast.buttons ? JSON.stringify(broadcast.buttons, null, 2) : '-';
+                const photoValue = broadcast.photo_url ? `<a href="${broadcast.photo_url}" target="_blank" rel="noopener noreferrer">${broadcast.photo_url}</a>` : '-';
+                const targetSegment = broadcast.target_segment || 'consent';
+                const parseMode = broadcast.use_markdown ? 'MarkdownV2' : 'Plain';
+
+                document.getElementById('content').innerHTML = `
+                    <h2>Рассылка #${broadcast.id}</h2>
+                    <div class="content">
+                        <p><strong>Заголовок:</strong> ${broadcast.title || '-'}</p>
+                        <p><strong>Статус:</strong> ${broadcast.status}</p>
+                        <p><strong>Целевая аудитория:</strong> ${targetSegment}</p>
+                        <p><strong>Режим форматирования:</strong> ${parseMode}</p>
+                        <p><strong>Отправлено:</strong> ${broadcast.sent_count || 0}</p>
+                        <p><strong>Ошибки:</strong> ${broadcast.failed_count || 0}</p>
+                        <p><strong>Создана:</strong> ${formatDate(broadcast.created_at)}</p>
+                        <p><strong>Отправлена:</strong> ${formatDate(broadcast.sent_at)}</p>
+                        <p><strong>Фото:</strong> ${photoValue}</p>
+                        <div class="form-group">
+                            <label>Текст</label>
+                            <pre style="white-space:pre-wrap; background:#f8f9fa; padding:12px; border:1px solid #eee; border-radius:4px;">${broadcast.content || '-'}</pre>
+                        </div>
+                        <div class="form-group">
+                            <label>Кнопки (inline_keyboard)</label>
+                            <pre style="white-space:pre-wrap; background:#f8f9fa; padding:12px; border:1px solid #eee; border-radius:4px;">${buttonsValue}</pre>
+                        </div>
+                        <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+                            ${broadcast.status === 'draft' ? `<button class="btn btn-success" onclick="sendBroadcast(${broadcast.id})">Отправить</button>` : ''}
+                            <button class="btn" onclick="window.location.hash = '#/broadcasts'; loadBroadcasts()">Назад к рассылкам</button>
+                        </div>
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Error loading broadcast:', error);
+                showError('Не удалось загрузить рассылку');
+            }
+        }
+
+        function deleteBroadcast(broadcastId) {
+            if (!confirm('Удалить эту рассылку?')) return;
+            fetch(`/api/broadcasts/${broadcastId}`, {
+                method: 'DELETE',
+                credentials: 'include'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+                loadBroadcasts();
+            })
+            .catch(error => {
+                console.error('Error deleting broadcast:', error);
+                alert('Ошибка при удалении рассылки');
+            });
         }
     </script>
 </body>

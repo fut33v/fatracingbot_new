@@ -10,11 +10,8 @@ class BroadcastService {
   }
 
   async getTargetUsers(targetSegment) {
-    const segment = (targetSegment || 'consent').toLowerCase();
-    if (segment === 'all') {
-      return UserModel.getActiveUsers();
-    }
-    return UserModel.getUsersWithBroadcastConsent();
+    // We no longer segment by consent; send to all active users (not blocked)
+    return UserModel.getActiveUsers();
   }
 
   async sendBroadcast(message, { photoUrl = null, buttons = null, targetSegment = 'consent', parseMode = null } = {}) {
@@ -104,9 +101,16 @@ class BroadcastService {
       }
       return true;
     } catch (error) {
-      // If user blocked the bot, mark them as blocked
-      if (error.code === 403) {
-        await UserModel.markUserAsBlocked(telegramId);
+      // If user blocked the bot, mark them as blocked to avoid future broadcasts
+      const isForbidden = error?.code === 403 || error?.response?.error_code === 403;
+      const isBlockedMessage = typeof error?.description === 'string' && error.description.includes('blocked by the user');
+      if (isForbidden || isBlockedMessage) {
+        try {
+          await UserModel.markUserAsBlocked(telegramId);
+          console.warn(`User ${telegramId} marked as blocked after broadcast failure.`);
+        } catch (markError) {
+          console.error(`Failed to mark user ${telegramId} as blocked:`, markError);
+        }
       }
       throw error;
     }

@@ -10,6 +10,12 @@ const https = require('https');
 
 const MAX_PVZ_OPTIONS = 5;
 const YANDEX_PVZ_ENABLED = process.env.FEATURE_ENABLE_YANDEX_PVZ === 'true';
+const FATRACING_CHANNEL_ID = process.env.FATRACING_CHANNEL_ID;
+
+function escapeMarkdownV2(text) {
+  if (!text) return '';
+  return text.replace(/([_\\*\[\]\(\)~`>#+\-=|{}.!])/g, '\\$1');
+}
 
 // Initialize the bot
 const bot = new Telegraf(process.env.BOT_TOKEN);
@@ -58,7 +64,8 @@ bot.start(async (ctx) => {
 Выбери интересующий раздел в меню ниже:
     `;
     
-    await ctx.reply(welcomeMessage, getMenuKeyboard());
+    const footer = '\n\nПо всем вопросам пишите @fatracing_manager';
+    await ctx.reply(welcomeMessage + footer, getMenuInlineKeyboard());
   } catch (error) {
     console.error('Error in start command:', error);
     await ctx.reply('❌ Произошла ошибка. Попробуйте позже.');
@@ -68,7 +75,7 @@ bot.start(async (ctx) => {
 // Main menu command
 bot.command('menu', async (ctx) => {
   try {
-    await ctx.reply('Выбери интересующий раздел:', getMenuKeyboard());
+    await ctx.reply('Выбери интересующий раздел:', getMenuInlineKeyboard());
   } catch (error) {
     console.error('Error in menu command:', error);
     await ctx.reply('❌ Произошла ошибка. Попробуйте позже.');
@@ -78,18 +85,19 @@ bot.command('menu', async (ctx) => {
 // Main menu callback
 bot.action('main_menu', async (ctx) => {
   try {
-    const keyboard = getMenuKeyboard();
+    const keyboard = getMenuInlineKeyboard();
     const hasCbMsg = Boolean(ctx.update?.callback_query?.message?.message_id);
+    const footer = '\n\nПо всем вопросам пишите @fatracing_manager';
     if (hasCbMsg) {
       try {
-        await ctx.editMessageText('Выбери интересующий раздел:', keyboard);
+        await ctx.editMessageText('Выбери интересующий раздел:' + footer, keyboard);
         await ctx.answerCbQuery();
         return;
       } catch (error) {
         console.warn('editMessageText failed in main_menu, sending new message', error.description || error.message);
       }
     }
-    await ctx.reply('Выбери интересующий раздел:', keyboard);
+    await ctx.reply('Выбери интересующий раздел:' + footer, keyboard);
     if (ctx.update?.callback_query) {
       await ctx.answerCbQuery();
     }
@@ -464,7 +472,7 @@ bot.action('checkout', async (ctx) => {
 });
 
 // Handle text messages during checkout
-bot.on('text', async (ctx) => {
+bot.on('text', async (ctx, next) => {
   // If checkout is active but cart got emptied, abort flow early
   if (await abortIfCartEmptyDuringCheckout(ctx)) {
     return;
@@ -478,8 +486,8 @@ bot.on('text', async (ctx) => {
     return;
   }
   if (!ctx.session || !ctx.session.checkoutStep) {
-    // Not in checkout flow, ignore
-    return;
+    // Not in checkout flow, continue to other handlers
+    return next();
   }
   
   const userId = ctx.from.id;
@@ -938,36 +946,64 @@ async function abortIfCartEmptyDuringCheckout(ctx) {
   return false;
 }
 
-// Promo codes menu
-bot.action('promos', async (ctx) => {
+async function showPromos(ctx, { fromCallback = false } = {}) {
   try {
     const promos = await PromoCodeModel.getActivePromoCodes();
-    
+
     if (promos.length === 0) {
-      await ctx.editMessageText('🎁 Активных промокодов пока нет. Следи за новостями!', getMenuKeyboard());
-      await ctx.answerCbQuery();
+      const emptyText = '🎁 Активных промокодов пока нет. Следи за новостями!';
+      if (fromCallback) {
+        await ctx.editMessageText(emptyText, getMenuKeyboard());
+        await ctx.answerCbQuery();
+      } else {
+        await ctx.reply(emptyText, getMenuKeyboard());
+      }
       return;
     }
-    
-    let message = '🎁 Доступные промокоды:\n\n';
-    
+
+    const message = '🎁 Доступные промокоды:\n\n';
     const keyboard = [
       ...promos.map(promo => [
         Markup.button.callback(`🎁 ${promo.partnerName}`, `promo_${promo.id}`)
       ]),
       [Markup.button.callback('⬅️ Назад', 'main_menu')]
     ];
-    
-    await ctx.editMessageText(message, Markup.inlineKeyboard(keyboard));
-    await ctx.answerCbQuery();
+
+    if (fromCallback) {
+      await ctx.editMessageText(message, Markup.inlineKeyboard(keyboard));
+      await ctx.answerCbQuery();
+    } else {
+      await ctx.reply(message, Markup.inlineKeyboard(keyboard));
+    }
   } catch (error) {
-    console.error('Error in promos action:', error);
+    console.error('Error in promos handler:', error);
     try {
-      await ctx.answerCbQuery('❌ Произошла ошибка, попробуйте позже');
+      if (fromCallback) {
+        await ctx.answerCbQuery('❌ Произошла ошибка, попробуйте позже');
+      } else {
+        await ctx.reply('❌ Произошла ошибка, попробуйте позже');
+      }
     } catch (callbackError) {
       console.error('Failed to send callback query:', callbackError);
     }
   }
+}
+
+// Promo codes menu
+bot.action('promos', async (ctx) => {
+  await showPromos(ctx, { fromCallback: true });
+});
+
+bot.hears('🎁 Промокоды партнёров', async (ctx) => {
+  await showPromos(ctx, { fromCallback: false });
+});
+
+bot.command('promos', async (ctx) => {
+  await showPromos(ctx, { fromCallback: false });
+});
+
+bot.hears(/промокод/i, async (ctx) => {
+  await showPromos(ctx, { fromCallback: false });
 });
 
 // Promo code details
@@ -981,21 +1017,30 @@ bot.action(/promo_(\d+)/, async (ctx) => {
       return;
     }
     
-    let message = `🎁 ${promo.partnerName}\n\n`;
-    message += `${promo.description}\n\n`;
-    message += `🔢 Промокод: \`${promo.code}\`\n`;
+    const promoName = escapeMarkdownV2(promo.partnerName || 'Промокод');
+    const promoDesc = escapeMarkdownV2(promo.description || '');
+    const promoCode = (promo.code || '').replace(/`/g, '\\`');
+    let message = `🎁 ${promoName}\n\n`;
+    if (promoDesc) {
+      message += `${promoDesc}\n\n`;
+    }
+    message += `🔢 Промокод: \`${promoCode}\``;
     
     const dates = promo.getFormattedDates();
     if (dates) {
-      message += `📅 Действует: ${dates}\n`;
+      message += `\n📅 Действует: ${escapeMarkdownV2(dates)}`;
     }
     
-    const keyboard = [
-      [Markup.button.url('🔗 Перейти к партнёру', promo.link)],
-      [Markup.button.callback('⬅️ Назад', 'promos')]
-    ];
-    
-    await ctx.editMessageText(message, Markup.inlineKeyboard(keyboard).parse_mode('Markdown'));
+    const buttons = [];
+    if (promo.link) {
+      buttons.push([Markup.button.url('🔗 Перейти к партнёру', promo.link)]);
+    }
+    buttons.push([Markup.button.callback('⬅️ Назад', 'promos')]);
+
+    await ctx.editMessageText(message, {
+      ...Markup.inlineKeyboard(buttons),
+      parse_mode: 'MarkdownV2'
+    });
     await ctx.answerCbQuery();
   } catch (error) {
     console.error('Error in promo action:', error);
@@ -1008,28 +1053,65 @@ bot.action(/promo_(\d+)/, async (ctx) => {
 });
 
 // Statistics menu
-bot.action('stats', async (ctx) => {
+async function showStats(ctx, { fromCallback }) {
   const userId = ctx.from.id;
-  
-  try {
-    const totalDays = await ChannelMembershipModel.getTotalSubscriptionDays(userId);
-    
-    const message = `
+  const prompt = '📢 Подпишись на канал FATRACING, чтобы смотреть статистику и получать бонусы.';
+
+  const check = await ensureChannelSubscribed(ctx);
+  if (!check.ok) {
+    if (fromCallback && ctx.update?.callback_query?.message?.message_id) {
+      await ctx.editMessageText(prompt, getSubscribePromptKeyboard());
+      await ctx.answerCbQuery();
+    } else {
+      await ctx.reply(prompt, getSubscribePromptKeyboard());
+    }
+    return;
+  }
+
+  const dbUserId = await getDbUserId(userId, ctx.from);
+  const totalDays = dbUserId ? await ChannelMembershipModel.getTotalSubscriptionDays(dbUserId) : 0;
+  const message = `
 📊 Твоя статистика:
 
 🎖 Дней подписки на канал: ${totalDays}
 
 Скоро здесь появится больше статистики!
-    `;
-    
-    const keyboard = [
-      [Markup.button.callback('⬅️ Назад', 'main_menu')]
-    ];
-    
+  `;
+
+  const keyboard = [[Markup.button.callback('⬅️ Назад', 'main_menu')]];
+
+  if (fromCallback && ctx.update?.callback_query?.message?.message_id) {
     await ctx.editMessageText(message, Markup.inlineKeyboard(keyboard));
     await ctx.answerCbQuery();
+  } else {
+    await ctx.reply(message, Markup.inlineKeyboard(keyboard));
+  }
+}
+
+bot.action('stats', async (ctx) => {
+  try {
+    await showStats(ctx, { fromCallback: true });
   } catch (error) {
     console.error('Error in stats action:', error);
+    try {
+      await ctx.answerCbQuery('❌ Произошла ошибка, попробуйте позже');
+    } catch (callbackError) {
+      console.error('Failed to send callback query:', callbackError);
+    }
+  }
+});
+
+bot.action('check_channel_subscription', async (ctx) => {
+  try {
+    const check = await ensureChannelSubscribed(ctx);
+    if (check.ok) {
+      await ctx.answerCbQuery('✅ Подписка подтверждена');
+      await showStats(ctx, { fromCallback: true });
+    } else {
+      await ctx.answerCbQuery('❌ Подписка не найдена');
+    }
+  } catch (error) {
+    console.error('Error in check_channel_subscription:', error);
     try {
       await ctx.answerCbQuery('❌ Произошла ошибка, попробуйте позже');
     } catch (callbackError) {
@@ -1042,25 +1124,49 @@ bot.action('stats', async (ctx) => {
 bot.action('about', async (ctx) => {
   try {
     const message = `
-ℹ️ О проекте FATRACING
+<b>ℹ️ FATRACING: карта контента</b>
 
-FATRACING - это сообщество любителей велоспорта, объединённых страстью к скорости, приключениям и здоровому образу жизни.
+🐸 <b>Гонки (чаты)</b>
+• <a href="https://t.me/tsargravel">Царь Грейдер</a>
+• <a href="https://t.me/tipacyclo">Циклокросс</a>
+• <a href="https://t.me/vyalomarafon">Вяломарафон</a>
 
-🚴‍♂️ Мы проводим регулярные выезды
-🔥 Организуем соревнования
-🎁 Раздаем мерч
-🤝 Сотрудничаем с брендами
+📄 <a href="https://clc.to/fatracing_table_tg">Таблица тренеров</a>
 
-Следи за нами в соцсетях:
-🔗 Instagram: @fatracing
-🔗 VK: vk.com/fatracing
-    `;
+🏆 Русская гравийная серия — <a href="https://t.me/gravelru">@gravelru</a>
+🗺 Маршрут Царь Грейдер 2025: <a href="https://mapmagic.app/map?routes=0vXXbq9&b=Y">250 км</a>, <a href="https://mapmagic.app/map?routes=6JrrM46&b=OC&o=R1">180 км</a>
+🗺 Маршрут Царь Грейдер 2024 — <a href="https://mapmagic.app/map?routes=6484zB6">смотреть</a>
+📸 <a href="https://t.me/fatracing/1656">Фото ЦГ 2025</a>
+📺 <a href="https://t.me/fatracing/1710">Видео ЦГ 2025</a>
+📋 <a href="https://t.me/fatracing/1657">Результаты ЦГ 2025</a>
+
+🎶 <b>Контент</b>
+• <a href="https://podcast.ru/1684694636">Подкаст</a>
+• <a href="https://boosty.to/fatracing">Бусти</a>
+• <a href="https://vkvideo.ru/video-153711258_456239042">Новогодний стрим</a>
+• <a href="https://www.youtube.com/@fut33v">YouTube‑канал</a>
+• <a href="https://t.me/fatracing/1041">Обои</a>
+• <a href="https://t.me/fatracing/1030">Подборка каналов</a>
+• <a href="https://t.me/fatracing/942">Структурированная подборка</a>
+
+🇷🇺 <b>Комьюнити</b>
+• <a href="https://t.me/tourdeselishi">Шоссейное комьюнити ТДС</a>
+• <a href="https://t.me/fatracing/917">Скидка на кофе</a>
+• <a href="https://t.me/fatracing/1182">Купи велосипед тут</a>
+
+🎫 <a href="https://t.me/fatracing/1219">Промокоды</a>
+❓ Вопросы: @fatracing_manager
+`;
     
     const keyboard = [
       [Markup.button.callback('⬅️ Назад', 'main_menu')]
     ];
     
-    await ctx.editMessageText(message, Markup.inlineKeyboard(keyboard));
+    await ctx.editMessageText(message, {
+      ...Markup.inlineKeyboard(keyboard),
+      parse_mode: 'HTML',
+      disable_web_page_preview: true
+    });
     await ctx.answerCbQuery();
   } catch (error) {
     console.error('Error in about action:', error);
@@ -1107,6 +1213,105 @@ function getMenuKeyboard() {
     ['🛒 Магазин мерча', '🎁 Промокоды партнёров'],
     ['📊 Моя статистика', 'ℹ️ О проекте FATRACING']
   ]).resize();
+}
+
+function getMenuInlineKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('🛒 Магазин', 'shop'), Markup.button.callback('🎁 Промокоды', 'promos')],
+    [Markup.button.callback('📊 Статистика', 'stats'), Markup.button.callback('ℹ️ О проекте', 'about')]
+  ]);
+}
+
+function getChannelLink() {
+  const envLink = process.env.FATRACING_CHANNEL_LINK || process.env.FATRACING_CHANNEL_URL;
+  if (envLink) return envLink;
+  if (!FATRACING_CHANNEL_ID) return null;
+  // If ID looks like @username or username
+  if (FATRACING_CHANNEL_ID.startsWith('@')) {
+    return `https://t.me/${FATRACING_CHANNEL_ID.replace('@', '')}`;
+  }
+  // Numeric channel ids cannot be linked directly without username
+  return null;
+}
+
+function getChannelChatId() {
+  if (!FATRACING_CHANNEL_ID) return null;
+  const link = getChannelLink();
+  if (link) {
+    try {
+      const parsed = new URL(link);
+      const path = parsed.pathname.replace(/^\//, '');
+      if (path) return `@${path}`;
+    } catch (e) {
+      // ignore
+    }
+  }
+  if (FATRACING_CHANNEL_ID.startsWith('@')) return FATRACING_CHANNEL_ID;
+  // ensure -100 prefix for numeric channels/supergroups
+  if (/^-?\d+$/.test(FATRACING_CHANNEL_ID)) {
+    const numeric = FATRACING_CHANNEL_ID.startsWith('-') ? FATRACING_CHANNEL_ID : `-100${FATRACING_CHANNEL_ID}`;
+    return numeric;
+  }
+  return FATRACING_CHANNEL_ID;
+}
+
+async function ensureChannelSubscribed(ctx) {
+  if (!FATRACING_CHANNEL_ID) return { ok: true };
+  const userId = ctx.from?.id;
+  if (!userId) return { ok: false, error: 'no-user' };
+  const chatId = getChannelChatId();
+  if (!chatId) return { ok: false, error: 'bad-chat-id' };
+
+  try {
+    const member = await ctx.telegram.getChatMember(chatId, userId);
+    const status = member?.status;
+    const subscribed = ['member', 'administrator', 'creator'].includes(status);
+    if (subscribed) {
+      const dbUserId = await getDbUserId(userId, ctx.from);
+      if (dbUserId) {
+        try {
+          await ChannelMembershipModel.recordUserJoin(dbUserId);
+        } catch (dbError) {
+          console.error('Failed to record channel membership:', dbError);
+        }
+      }
+      try {
+        return { ok: true };
+      } catch (dbError) {
+        console.error('Failed to record channel membership:', dbError);
+        return { ok: true };
+      }
+    }
+    return { ok: false, error: 'not-subscribed' };
+  } catch (error) {
+    // Common cases: 400 bad request (private), 403 bot not in channel
+    console.error(`Channel subscription check failed for chat ${chatId}:`, error.description || error.message);
+    return { ok: false, error: 'check-failed' };
+  }
+}
+
+function getSubscribePromptKeyboard() {
+  const channelLink = getChannelLink();
+  const rows = [];
+  if (channelLink) {
+    rows.push([Markup.button.url('✅ Подписаться на канал', channelLink)]);
+  }
+  rows.push([Markup.button.callback('🔄 Проверить подписку', 'check_channel_subscription')]);
+  rows.push([Markup.button.callback('⬅️ Назад', 'main_menu')]);
+  return Markup.inlineKeyboard(rows);
+}
+
+async function getDbUserId(telegramId, telegramUser) {
+  try {
+    let user = await UserModel.getUserByTelegramId(telegramId);
+    if (!user && telegramUser) {
+      user = await UserModel.upsertUser(telegramUser);
+    }
+    return user?.id;
+  } catch (error) {
+    console.error('Failed to resolve db user id:', error);
+    return null;
+  }
 }
 
 // Helper to build product captions
@@ -1517,13 +1722,19 @@ bot.on('chat_member', async (ctx) => {
   }
   
   try {
+    const dbUserId = await getDbUserId(userId, chatMember.from);
+    if (!dbUserId) {
+      console.warn(`Cannot record channel membership for telegram ${userId}: db user not found.`);
+      return;
+    }
+
     if (chatMember.new_chat_member && 
         (chatMember.new_chat_member.status === 'member' || 
          chatMember.new_chat_member.status === 'administrator' || 
          chatMember.new_chat_member.status === 'creator')) {
       // User joined channel
       console.log(`User ${userId} joined channel ${channelId}`);
-      await ChannelMembershipModel.recordUserJoin(userId);
+      await ChannelMembershipModel.recordUserJoin(dbUserId);
     } else if (chatMember.old_chat_member && 
                (chatMember.old_chat_member.status === 'member' || 
                 chatMember.old_chat_member.status === 'administrator' || 
@@ -1532,7 +1743,7 @@ bot.on('chat_member', async (ctx) => {
                 chatMember.new_chat_member.status === 'kicked')) {
       // User left channel
       console.log(`User ${userId} left channel ${channelId}`);
-      await ChannelMembershipModel.recordUserLeave(userId);
+      await ChannelMembershipModel.recordUserLeave(dbUserId);
     }
   } catch (error) {
     console.error('Error handling channel membership:', error);
