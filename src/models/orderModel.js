@@ -127,6 +127,7 @@ async function getOrdersWithItemsByTelegramId(telegramId) {
       productId: row.product_id,
       variantId: row.variant_id,
       gender: row.gender,
+      questionAnswers: row.question_answers,
       quantity: row.quantity,
       pricePerUnit: parseFloat(row.price_per_unit),
       productName: row.product_name || 'Товар',
@@ -148,16 +149,20 @@ async function getOrdersWithItemsByTelegramId(telegramId) {
 async function createOrderItems(orderId, cartItems) {
   const query = `
     INSERT INTO order_items (
-      order_id, product_id, variant_id, gender, quantity, price_per_unit
-    ) VALUES ($1, $2, $3, $4, $5, $6)`;
+      order_id, product_id, variant_id, gender, question_answers, quantity, price_per_unit
+    ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)`;
   
   try {
     for (const item of cartItems) {
+      const answersJson = Array.isArray(item.question_answers) && item.question_answers.length
+        ? JSON.stringify(item.question_answers)
+        : null;
       const values = [
         orderId,
         item.product_id,
         item.variant_id,
         item.gender || null,
+        answersJson,
         item.quantity,
         item.product_price
       ];

@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS products (
     photo_url VARCHAR(512),
     size_guide_url VARCHAR(512),
     gender_required BOOLEAN DEFAULT FALSE,
+    questions JSONB DEFAULT '[]'::jsonb,
     stock INTEGER DEFAULT 0,
     is_preorder BOOLEAN DEFAULT FALSE,
     preorder_end_date DATE,
@@ -94,6 +95,7 @@ CREATE TABLE IF NOT EXISTS order_items (
     product_id INTEGER REFERENCES products(id),
     variant_id INTEGER REFERENCES product_variants(id),
     gender VARCHAR(1),
+    question_answers JSONB,
     quantity INTEGER NOT NULL,
     price_per_unit DECIMAL(10, 2) NOT NULL
 );
@@ -146,6 +148,7 @@ CREATE TABLE IF NOT EXISTS cart_items (
     product_id INTEGER REFERENCES products(id),
     variant_id INTEGER REFERENCES product_variants(id),
     gender VARCHAR(1),
+    question_answers JSONB,
     quantity INTEGER NOT NULL DEFAULT 1,
     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

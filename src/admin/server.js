@@ -44,7 +44,8 @@ function escapeMarkdownV2(text = '') {
     .replace(/\+/g, '\\+');
 }
 
-function normalizeProductImages(imagesInput, photoUrl) {
+function normalizeProductImages(imagesInput, photoUrl, options = {}) {
+  const { includePhoto = true } = options;
   const images = Array.isArray(imagesInput)
     ? imagesInput
         .filter(url => typeof url === 'string')
@@ -52,7 +53,7 @@ function normalizeProductImages(imagesInput, photoUrl) {
         .filter(Boolean)
     : [];
 
-  if (photoUrl && !images.includes(photoUrl)) {
+  if (includePhoto && photoUrl && !images.includes(photoUrl)) {
     images.unshift(photoUrl);
   }
   return images;
@@ -81,6 +82,11 @@ async function fetchProductVariants(productId) {
 }
 
 async function saveProductVariants(client, productId, variants = []) {
+  // Clean up cart items that reference existing variants to avoid FK violations
+  await client.query(
+    'DELETE FROM cart_items WHERE variant_id IN (SELECT id FROM product_variants WHERE product_id = $1)',
+    [productId]
+  );
   await client.query('DELETE FROM product_variants WHERE product_id = $1', [productId]);
   if (!variants || variants.length === 0) return;
   for (const variant of variants) {
@@ -369,6 +375,7 @@ app.post('/api/products', requireAdmin, async (req, res) => {
       photo_url,
       size_guide_url,
       gender_required,
+      questions,
       images,
       variants,
       status,
@@ -376,15 +383,17 @@ app.post('/api/products', requireAdmin, async (req, res) => {
       preorder_end_date,
       estimated_delivery_date
     } = req.body;
-    const normalizedImages = normalizeProductImages(images, photo_url);
+    const normalizedImages = normalizeProductImages(images, photo_url, { includePhoto: true });
     const coverUrl = normalizedImages[0] || photo_url || null;
+    const normalizedQuestions = Array.isArray(questions) ? questions.filter(Boolean) : [];
+    const questionsJson = JSON.stringify(normalizedQuestions);
     const client = await db.getClient();
 
     try {
       await client.query('BEGIN');
       const insertResult = await client.query(
-        `INSERT INTO products (name, description, price, cost, shipping_included, shipping_cost, currency, photo_url, size_guide_url, gender_required, stock, is_preorder, preorder_end_date, estimated_delivery_date, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
+        `INSERT INTO products (name, description, price, cost, shipping_included, shipping_cost, currency, photo_url, size_guide_url, gender_required, questions, stock, is_preorder, preorder_end_date, estimated_delivery_date, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, $16) RETURNING id`,
         [
           name,
           description,
@@ -396,6 +405,7 @@ app.post('/api/products', requireAdmin, async (req, res) => {
           coverUrl,
           size_guide_url || null,
           gender_required === true,
+          questionsJson,
           stock || 0,
           is_preorder === true,
           preorder_end_date || null,
@@ -441,6 +451,7 @@ app.put('/api/products/:id', requireAdmin, async (req, res) => {
       photo_url,
       size_guide_url,
       gender_required,
+      questions,
       images,
       variants,
       status,
@@ -454,19 +465,24 @@ app.put('/api/products/:id', requireAdmin, async (req, res) => {
       return res.status(404).json({ error: 'Product not found' });
     }
 
+    const includeExistingCover = images === undefined;
     const normalizedImages = images === undefined
-      ? normalizeProductImages(existing.images || [], photo_url || existing.photo_url)
-      : normalizeProductImages(images, photo_url || existing.photo_url);
-    const coverUrl = normalizedImages[0] || null;
+      ? normalizeProductImages(existing.images || [], photo_url || existing.photo_url, { includePhoto: true })
+      : normalizeProductImages(images, null, { includePhoto: false });
+    const coverUrl = normalizedImages[0] || (includeExistingCover ? (photo_url || existing.photo_url || null) : null);
+    const normalizedQuestions = questions === undefined
+      ? (Array.isArray(existing.questions) ? existing.questions.filter(Boolean) : [])
+      : (Array.isArray(questions) ? questions.filter(Boolean) : []);
+    const questionsJson = JSON.stringify(normalizedQuestions);
     const client = await db.getClient();
 
     try {
       await client.query('BEGIN');
       const result = await client.query(
         `UPDATE products
-         SET name = $1, description = $2, price = $3, cost = $4, shipping_included = $5, shipping_cost = $6, currency = $7, stock = $8, photo_url = $9, size_guide_url = $10, gender_required = $11, status = $12, is_preorder = $13,
-             preorder_end_date = $14, estimated_delivery_date = $15, updated_at = CURRENT_TIMESTAMP
-         WHERE id = $16 RETURNING id`,
+         SET name = $1, description = $2, price = $3, cost = $4, shipping_included = $5, shipping_cost = $6, currency = $7, stock = $8, photo_url = $9, size_guide_url = $10, gender_required = $11, questions = $12::jsonb, status = $13, is_preorder = $14,
+             preorder_end_date = $15, estimated_delivery_date = $16, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $17 RETURNING id`,
         [
           name,
           description,
@@ -479,6 +495,7 @@ app.put('/api/products/:id', requireAdmin, async (req, res) => {
           coverUrl,
           size_guide_url || null,
           gender_required === true,
+          questionsJson,
           status,
           is_preorder === true,
           preorder_end_date || null,
@@ -712,6 +729,7 @@ app.get('/api/orders/:id', requireAdmin, async (req, res) => {
               oi.variant_id,
               pv.name AS variant_name,
               oi.gender,
+              oi.question_answers,
               oi.quantity,
               oi.price_per_unit
        FROM order_items oi

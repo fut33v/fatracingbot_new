@@ -49,6 +49,10 @@ def apply_migrations(conn, cursor):
         ADD COLUMN IF NOT EXISTS size_guide_url VARCHAR(512)
     """)
     cursor.execute("""
+        ALTER TABLE products
+        ADD COLUMN IF NOT EXISTS questions JSONB DEFAULT '[]'::jsonb
+    """)
+    cursor.execute("""
         ALTER TABLE orders
         ADD COLUMN IF NOT EXISTS payment_proof_url TEXT
     """)
@@ -77,8 +81,16 @@ def apply_migrations(conn, cursor):
         ADD COLUMN IF NOT EXISTS gender VARCHAR(1)
     """)
     cursor.execute("""
+        ALTER TABLE cart_items
+        ADD COLUMN IF NOT EXISTS question_answers JSONB
+    """)
+    cursor.execute("""
         ALTER TABLE order_items
         ADD COLUMN IF NOT EXISTS gender VARCHAR(1)
+    """)
+    cursor.execute("""
+        ALTER TABLE order_items
+        ADD COLUMN IF NOT EXISTS question_answers JSONB
     """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS product_images (
@@ -190,6 +202,7 @@ def init_database():
                 photo_url VARCHAR(512),
                 size_guide_url VARCHAR(512),
                 gender_required BOOLEAN DEFAULT FALSE,
+                questions JSONB DEFAULT '[]'::jsonb,
                 stock INTEGER DEFAULT 0,
                 is_preorder BOOLEAN DEFAULT FALSE,
                 preorder_end_date DATE,
@@ -254,6 +267,7 @@ def init_database():
                 product_id INTEGER REFERENCES products(id),
                 variant_id INTEGER REFERENCES product_variants(id),
                 gender VARCHAR(1),
+                question_answers JSONB,
                 quantity INTEGER NOT NULL,
                 price_per_unit DECIMAL(10, 2) NOT NULL
             )
@@ -317,6 +331,7 @@ def init_database():
                 product_id INTEGER REFERENCES products(id),
                 variant_id INTEGER REFERENCES product_variants(id),
                 gender VARCHAR(1),
+                question_answers JSONB,
                 quantity INTEGER NOT NULL DEFAULT 1,
                 added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )

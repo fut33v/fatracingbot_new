@@ -310,9 +310,7 @@ bot.action(/add_to_cart_(\d+)(_(\d+))?/, async (ctx) => {
       return;
     }
 
-    await CartModel.addToCart(userId, productId, variantId, 1, null);
-    await ctx.answerCbQuery('✅ Добавлено в корзину!');
-    await showCart(ctx);
+    await startQuestionFlow(ctx, product, variantId, null);
   } catch (error) {
     console.error('Error adding to cart:', error);
     try {
@@ -334,9 +332,8 @@ bot.action(/select_gender_(\d+)_(\d+)_([mf])/, async (ctx) => {
     if (ctx.from) {
       await UserModel.upsertUser(ctx.from);
     }
-    await CartModel.addToCart(userId, productId, variantId, 1, gender);
-    await ctx.answerCbQuery('✅ Добавлено в корзину!');
-    await showCart(ctx);
+    const product = await ProductModel.getProductById(productId);
+    await startQuestionFlow(ctx, product, variantId, gender);
   } catch (error) {
     console.error('Error adding to cart with gender:', error);
     try {
@@ -346,6 +343,98 @@ bot.action(/select_gender_(\d+)_(\d+)_([mf])/, async (ctx) => {
     }
   }
 });
+
+async function startQuestionFlow(ctx, product, variantId, gender) {
+  const userId = ctx.from.id;
+  const questions = Array.isArray(product?.questions) ? product.questions.filter(Boolean) : [];
+
+  if (!questions.length) {
+    await CartModel.addToCart(userId, product.id, variantId, 1, gender, null);
+    if (ctx.update?.callback_query) {
+      await ctx.answerCbQuery('✅ Добавлено в корзину!');
+    }
+    await showCart(ctx);
+    return;
+  }
+
+  ctx.session.questionFlow = {
+    productId: product.id,
+    variantId: variantId || null,
+    gender: gender || null,
+    questions,
+    answers: [],
+    index: 0
+  };
+
+  await askNextQuestion(ctx);
+}
+
+async function askNextQuestion(ctx) {
+  const flow = ctx.session?.questionFlow;
+  if (!flow) return;
+  const currentQuestion = flow.questions[flow.index];
+  if (!currentQuestion) {
+    await finalizeAddToCartWithAnswers(ctx);
+    return;
+  }
+  const prompt = `❓ ${currentQuestion}`;
+  await ctx.reply(prompt);
+}
+
+async function handleQuestionFlowResponse(ctx) {
+  const flow = ctx.session?.questionFlow;
+  if (!flow) return false;
+
+  const currentQuestion = flow.questions[flow.index];
+  if (!currentQuestion) {
+    await finalizeAddToCartWithAnswers(ctx);
+    return true;
+  }
+
+  const answer = ctx.message?.text || '';
+  flow.answers.push({ question: currentQuestion, answer });
+  flow.index += 1;
+
+  if (flow.index >= flow.questions.length) {
+    await finalizeAddToCartWithAnswers(ctx);
+    return true;
+  }
+
+  ctx.session.questionFlow = flow;
+  await askNextQuestion(ctx);
+  return true;
+}
+
+async function finalizeAddToCartWithAnswers(ctx) {
+  const flow = ctx.session?.questionFlow;
+  if (!flow) return;
+  const userId = ctx.from.id;
+
+  try {
+    await CartModel.addToCart(
+      userId,
+      flow.productId,
+      flow.variantId,
+      1,
+      flow.gender || null,
+      flow.answers
+    );
+    if (ctx.update?.callback_query) {
+      try {
+        await ctx.answerCbQuery('✅ Добавлено в корзину!');
+      } catch (e) {
+        // ignore
+      }
+    }
+    await ctx.reply('✅ Товар добавлен в корзину', getMenuKeyboard());
+    await showCart(ctx);
+  } catch (error) {
+    console.error('Error adding to cart with questions:', error);
+    await ctx.reply('❌ Не удалось добавить товар в корзину. Попробуйте позже.');
+  } finally {
+    ctx.session.questionFlow = null;
+  }
+}
 
 // Show user's orders
 bot.action('my_orders', async (ctx) => {
@@ -473,6 +562,11 @@ bot.action('checkout', async (ctx) => {
 
 // Handle text messages during checkout
 bot.on('text', async (ctx, next) => {
+  // Handle pending product questions flow before checkout logic
+  if (ctx.session?.questionFlow) {
+    const handled = await handleQuestionFlowResponse(ctx);
+    if (handled) return;
+  }
   // If checkout is active but cart got emptied, abort flow early
   if (await abortIfCartEmptyDuringCheckout(ctx)) {
     return;
@@ -1602,6 +1696,18 @@ async function showCart(ctx) {
       if (lower === 'f') return ' [Женская]';
       return ` [${gender}]`;
     };
+    const formatQuestionAnswers = (answers) => {
+      if (!Array.isArray(answers) || answers.length === 0) return '';
+      return answers
+        .map(entry => {
+          if (!entry || (!entry.question && !entry.answer)) return null;
+          const q = entry.question || 'Вопрос';
+          const a = entry.answer || '-';
+          return `   ❔ ${q}\n   ➜ ${a}`;
+        })
+        .filter(Boolean)
+        .join('\n');
+    };
 
     for (const item of cartItems) {
       const variantText = item.variant_name ? ` (${item.variant_name})` : '';
@@ -1609,6 +1715,10 @@ async function showCart(ctx) {
       const preorderText = item.is_preorder ? ' (предзаказ)' : '';
       message += `🔹 ${item.product_name}${variantText}${genderText}${preorderText} x${item.quantity}\n`;
       message += `   💰 ${parseFloat(item.product_price) * item.quantity} ${item.product_currency}\n`;
+      const qaText = formatQuestionAnswers(item.question_answers);
+      if (qaText) {
+        message += `${qaText}\n`;
+      }
       if (item.is_preorder) {
         message += '   🕒 Товар по предзаказу\n\n';
       } else {

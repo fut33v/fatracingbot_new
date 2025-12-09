@@ -1,26 +1,39 @@
 const db = require('./database');
 
 // Add item to cart
-async function addToCart(userId, productId, variantId = null, quantity = 1, gender = null) {
+async function addToCart(userId, productId, variantId = null, quantity = 1, gender = null, questionAnswers = null) {
   const userRow = await db.query('SELECT id FROM users WHERE telegram_id = $1', [userId]);
   const dbUserId = userRow.rows[0]?.id;
   if (!dbUserId) {
     throw new Error('user_not_found');
   }
 
-  // First, check if this item is already in the cart
-  const checkQuery = 'SELECT id, quantity FROM cart_items WHERE user_id = $1 AND product_id = $2 AND (variant_id = $3 OR (variant_id IS NULL AND $3 IS NULL)) AND (gender = $4 OR (gender IS NULL AND $4 IS NULL))';
-  const checkResult = await db.query(checkQuery, [dbUserId, productId, variantId, gender]);
-  
-  if (checkResult.rows.length > 0) {
-    // Update existing cart item
-    const updateQuery = 'UPDATE cart_items SET quantity = quantity + $1, added_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *';
-    return await db.query(updateQuery, [quantity, checkResult.rows[0].id]);
-  } else {
-    // Insert new cart item
-    const insertQuery = 'INSERT INTO cart_items (user_id, product_id, variant_id, gender, quantity) VALUES ($1, $2, $3, $4, $5) RETURNING *';
-    return await db.query(insertQuery, [dbUserId, productId, variantId, gender, quantity]);
+  const answers = Array.isArray(questionAnswers) && questionAnswers.length ? questionAnswers : null;
+  const answersJson = answers ? JSON.stringify(answers) : null;
+
+  // If there are answers, treat as unique item; otherwise try to merge
+  if (!answers) {
+    const checkQuery = `
+      SELECT id, quantity FROM cart_items
+      WHERE user_id = $1
+        AND product_id = $2
+        AND (variant_id = $3 OR (variant_id IS NULL AND $3 IS NULL))
+        AND (gender = $4 OR (gender IS NULL AND $4 IS NULL))
+        AND (question_answers IS NULL)
+    `;
+    const checkResult = await db.query(checkQuery, [dbUserId, productId, variantId, gender]);
+    
+    if (checkResult.rows.length > 0) {
+      const updateQuery = 'UPDATE cart_items SET quantity = quantity + $1, added_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *';
+      return await db.query(updateQuery, [quantity, checkResult.rows[0].id]);
+    }
   }
+
+  const insertQuery = `
+    INSERT INTO cart_items (user_id, product_id, variant_id, gender, question_answers, quantity)
+    VALUES ($1, $2, $3, $4, $5::jsonb, $6) RETURNING *
+  `;
+  return await db.query(insertQuery, [dbUserId, productId, variantId, gender, answersJson, quantity]);
 }
 
 // Get user's cart items
@@ -34,6 +47,7 @@ async function getCartItems(userId) {
       ci.id,
       ci.quantity,
       ci.gender,
+      ci.question_answers,
       p.id as product_id,
       p.name as product_name,
       p.price as product_price,

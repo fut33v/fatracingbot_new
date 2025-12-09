@@ -330,10 +330,11 @@
             links.forEach(link => {
                 const href = link.getAttribute('href');
                 const isOrders = href === '#/orders' && hash.startsWith('#/orders');
+                const isProducts = href === '#/products' && (hash === '#/products' || hash.startsWith('#/product/'));
                 const isUsers = href === '#/users' && hash.startsWith('#/users');
                 const isBroadcasts = href === '#/broadcasts' && hash.startsWith('#/broadcasts');
                 const isPromos = href === '#/promos' && hash.startsWith('#/promos');
-                const isActive = href === hash || isOrders || isUsers || isBroadcasts || isPromos;
+                const isActive = href === hash || isOrders || isProducts || isUsers || isBroadcasts || isPromos;
                 if (isActive) {
                     link.classList.add('active');
                 } else {
@@ -855,7 +856,7 @@
 
         function renderOrderDetails(order) {
             const itemsHtml = (order.items || []).length ? `
-                <table style="margin-top:12px;">
+                <table style="margin-top:12px; width:100%;">
                     <thead>
                         <tr>
                             <th>Товар</th>
@@ -863,44 +864,62 @@
                             <th>Пол</th>
                             <th>Кол-во</th>
                             <th>Цена</th>
+                            <th>Вопросы</th>
                         </tr>
                     </thead>
                     <tbody>
-                        ${order.items.map(item => `
-                            <tr>
-                                <td>${item.product_name || '—'}</td>
-                                <td>${item.variant_name || '—'}</td>
-                                <td>${item.gender || '—'}</td>
-                                <td>${item.quantity}</td>
-                                <td>${item.price_per_unit ? Number(item.price_per_unit).toFixed(2) : '0.00'} ₽</td>
-                            </tr>
-                        `).join('')}
+                        ${order.items.map(item => {
+                            const genderLabel = item.gender === 'm' ? 'М' : item.gender === 'f' ? 'Ж' : (item.gender || '—');
+                            const qa = Array.isArray(item.question_answers) && item.question_answers.length
+                                ? item.question_answers.map(entry => {
+                                    const q = entry.question || 'Вопрос';
+                                    const a = entry.answer || '-';
+                                    return `<div>❔ ${q}<br>➜ ${a}</div>`;
+                                  }).join('')
+                                : '—';
+                            return `
+                                <tr>
+                                    <td>${item.product_name || '—'}</td>
+                                    <td>${item.variant_name || '—'}</td>
+                                    <td>${genderLabel}</td>
+                                    <td>${item.quantity}</td>
+                                    <td>${item.price_per_unit ? Number(item.price_per_unit).toFixed(2) : '0.00'} ₽</td>
+                                    <td style="font-size:12px; color:#555;">${qa}</td>
+                                </tr>
+                            `;
+                        }).join('')}
                     </tbody>
                 </table>
             ` : '<p><strong>Товары:</strong> нет позиций</p>';
 
+            const proofHtml = order.payment_proof_url ? `
+                <div class="form-group" style="max-width:260px; min-width:220px;">
+                    <label>Скриншот оплаты</label>
+                    <div><a href="${order.payment_proof_url}" target="_blank">Открыть</a></div>
+                    <img src="${order.payment_proof_url}" alt="Скриншот оплаты" style="max-width: 240px; margin-top: 8px; border: 1px solid #eee; border-radius: 4px; display:block;">
+                </div>
+            ` : '<p><strong>Скриншот оплаты:</strong> нет</p>';
+
             document.getElementById('content').innerHTML = `
                 <h2>Заказ #${order.id}</h2>
                 <div class="content">
-                    <p><strong>Пользователь:</strong> ${order.first_name || ''} ${order.last_name || ''} (@${order.username || '-'})</p>
-                    <p><strong>Telegram ID:</strong> ${order.telegram_id}</p>
-                    <p><strong>Имя клиента:</strong> ${order.customer_name || '-'}</p>
-                    <p><strong>Город:</strong> ${order.city_country || '-'}</p>
-                    <p><strong>Комментарий пользователя:</strong> ${order.comment || '-'}</p>
-                    <p><strong>Статус:</strong> ${order.status}</p>
-                    <p><strong>Сумма:</strong> ${order.total_amount ? Number(order.total_amount).toFixed(2) : '0.00'} ₽</p>
-                    <p><strong>Оплата:</strong> ${order.payment_confirmed ? 'Подтверждена' : 'Не подтверждена'}</p>
-                    <p><strong>ПВЗ:</strong> ${order.delivery_pickup_address || order.delivery_pickup_id || 'не выбран'}</p>
-                    <p><strong>Заявка на доставку:</strong> ${order.delivery_request_id || 'не создана'}</p>
-                    <p><strong>Создан:</strong> ${formatDate(order.created_at)}</p>
-                    ${itemsHtml}
-                    ${order.payment_proof_url ? `
-                        <div class="form-group">
-                            <label>Скриншот оплаты</label>
-                            <div><a href="${order.payment_proof_url}" target="_blank">Открыть скриншот</a></div>
-                            <img src="${order.payment_proof_url}" alt="Скриншот оплаты" style="max-width: 100%; margin-top: 12px; border: 1px solid #eee; border-radius: 4px;">
+                    <div style="display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap;">
+                        <div style="flex:2 1 360px; min-width:320px;">
+                            <p><strong>Пользователь:</strong> ${order.first_name || ''} ${order.last_name || ''} (@${order.username || '-'})</p>
+                            <p><strong>Telegram ID:</strong> ${order.telegram_id}</p>
+                            <p><strong>Имя клиента:</strong> ${order.customer_name || '-'}</p>
+                            <p><strong>Город:</strong> ${order.city_country || '-'}</p>
+                            <p><strong>Комментарий пользователя:</strong> ${order.comment || '-'}</p>
+                            <p><strong>Статус:</strong> ${order.status}</p>
+                            <p><strong>Сумма:</strong> ${order.total_amount ? Number(order.total_amount).toFixed(2) : '0.00'} ₽</p>
+                            <p><strong>Оплата:</strong> ${order.payment_confirmed ? 'Подтверждена' : 'Не подтверждена'}</p>
+                            <p><strong>ПВЗ:</strong> ${order.delivery_pickup_address || order.delivery_pickup_id || 'не выбран'}</p>
+                            <p><strong>Заявка на доставку:</strong> ${order.delivery_request_id || 'не создана'}</p>
+                            <p><strong>Создан:</strong> ${formatDate(order.created_at)}</p>
+                            ${itemsHtml}
                         </div>
-                    ` : '<p><strong>Скриншот оплаты:</strong> нет</p>'}
+                        <div style="flex:0 0 auto;">${proofHtml}</div>
+                    </div>
                     <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;">
                         <button class="btn" onclick="updateOrderStatus(${order.id}, 'processing')">В обработку</button>
                         <button class="btn btn-success" onclick="updateOrderStatus(${order.id}, 'completed')">Выполнен</button>

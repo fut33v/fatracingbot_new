@@ -16,6 +16,7 @@ class Product {
     this.photoUrl = this.images[0] || null;
     this.sizeGuideUrl = data.size_guide_url || null;
     this.genderRequired = Boolean(data.gender_required);
+    this.questions = Array.isArray(data.questions) ? data.questions.filter(Boolean) : [];
     this.stock = parseInt(data.stock);
     this.isPreorder = Boolean(data.is_preorder);
     this.preorderEndDate = data.preorder_end_date ? new Date(data.preorder_end_date) : null;
